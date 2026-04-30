@@ -66,7 +66,9 @@ import {
   MapPinOff,
   Dices,
   Sparkle,
-  Globe2
+  Globe2,
+  Share2,
+  ChevronLeft,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
@@ -128,13 +130,74 @@ export default function App() {
   const [selectedPlace, setSelectedPlace] = useState<PlaceDetail | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
   const [filter, setFilter] = useState<'all' | 'restaurant' | 'cafe'>('all');
-  const [sortFilter, setSortFilter] = useState<'none' | 'top_rest' | 'top_cafe' | 'worst_rest' | 'worst_cafe' | 'trending' | 'nearby_10'>('none');
+  const [sortFilter, setSortFilter] = useState<'none' | 'top_rated' | 'top_rest' | 'top_cafe' | 'worst_rest' | 'worst_cafe' | 'trending' | 'nearby' | 'nearby_10'>('none');
   const [searchQuery, setSearchQuery] = useState('');
   const [displayPlaces, setDisplayPlaces] = useState<PlaceDetail[]>([]);
   const [internalRatingsMap, setInternalRatingsMap] = useState<Record<string, { rating: number, count: number }>>({});
   const [user, setUser] = useState<User | null>(null);
   
+  const [openNowOnly, setOpenNowOnly] = useState<boolean>(false);
+  const [priceFilter, setPriceFilter] = useState<number | null>(null);
+  
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('theme') === 'dark' || 
+        (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    return false;
+  });
+  const [showWheel, setShowWheel] = useState(false);
+  const [isSpinning, setIsSpinning] = useState(false);
+  const [winnerPlace, setWinnerPlace] = useState<PlaceDetail | null>(null);
   const [timeGreeting, setTimeGreeting] = useState({ title: '', subtitle: '' });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const handleSpin = () => {
+    console.log("Spinning logic executing...");
+    setIsSpinning(true);
+    setWinnerPlace(null);
+    
+    const sourceList = displayPlaces.length > 0 ? displayPlaces : (places.length > 0 ? places : []);
+    
+    setTimeout(() => {
+      if (sourceList.length > 0) {
+        const randomIndex = Math.floor(Math.random() * sourceList.length);
+        setWinnerPlace(sourceList[randomIndex]);
+      } else {
+        const fallbacks = [
+          { name: 'شاورما أبو عبدالله', vicinity: 'أقرب فرع لك' },
+          { name: 'قهوة المختصين', vicinity: 'مركز المدينة' },
+          { name: 'منتزه السلام', vicinity: 'حي الروضة' }
+        ];
+        const randomFallback = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+        setWinnerPlace(randomFallback as any);
+      }
+      setIsSpinning(false);
+    }, 1500);
+  };
+
+  const handleInviteFriend = (place: PlaceDetail) => {
+    const message = `👋 هلا يا أبو عبدالله! 
+
+ياخي ما ودك نغير جو؟ لقيت لك مكان خيالي:
+📍 ${place.name}
+🌟 تقييمنا له: ${place.internalRating?.toFixed(1) || '---'}
+
+وش قلت؟ نعتمد؟
+رابط المكان: ${place.url || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || '')}&query_place_id=${place.place_id}`}`;
+    
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
 
   useEffect(() => {
     const now = new Date();
@@ -412,7 +475,13 @@ export default function App() {
       result = result.filter(p => favorites.includes(p.place_id || ''));
     }
 
-    if (sortFilter === 'top_rest') {
+    if (sortFilter === 'top_rated') {
+      result = result
+        .sort((a, b) => ((b.internalRating || b.rating) || 0) - ((a.internalRating || a.rating) || 0));
+    } else if (sortFilter === 'nearby') {
+      result = result
+        .sort((a, b) => (a.distance || 0) - (b.distance || 0));
+    } else if (sortFilter === 'top_rest') {
       result = result
         .filter(p => p.types?.includes('restaurant'))
         .sort((a, b) => ((b.internalRating || b.rating) || 0) - ((a.internalRating || a.rating) || 0))
@@ -441,12 +510,32 @@ export default function App() {
       result = result
         .sort((a, b) => (a.distance || 0) - (b.distance || 0))
         .slice(0, 10);
-    } else if (filter !== 'all') {
+    }
+    
+    if (filter !== 'all') {
       result = result.filter(p => p.types?.includes(filter));
     }
 
+    // Phase 2 Filters
+    if (openNowOnly) {
+      result = result.filter(p => isPlaceOpen(p) === true);
+    }
+    
+    if (priceFilter !== null) {
+      result = result.filter(p => p.price_level === priceFilter);
+    }
+
+    if (searchQuery && !autocompleteRef.current?.getPlace()?.name) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(p => 
+        p.name?.toLowerCase().includes(q) || 
+        p.types?.some(t => t.toLowerCase().includes(q)) ||
+        p.vicinity?.toLowerCase().includes(q)
+      );
+    }
+
     setDisplayPlaces(result);
-  }, [places, sortFilter, filter, internalRatingsMap, showFavoritesOnly]);
+  }, [places, sortFilter, filter, internalRatingsMap, showFavoritesOnly, openNowOnly, priceFilter, searchQuery]);
 
   const handleLogin = async () => {
     try {
@@ -932,7 +1021,8 @@ export default function App() {
       });
 
       if (!aiRes.ok) {
-        throw new Error('فشل الاتصال بخدمة الذكاء الاصطناعي');
+        const errData = await aiRes.json().catch(() => ({}));
+        throw new Error(errData.details || 'فشل الاتصال بخدمة الذكاء الاصطناعي');
       }
 
       const aiData = await aiRes.json();
@@ -954,8 +1044,8 @@ export default function App() {
         })).sort((a, b) => (a.distance || 0) - (b.distance || 0));
         setPlaces(sorted as PlaceDetail[]);
       }
-    } catch (err) {
-      setError('فشل الحصول على نصيحة ذكية حالياً.');
+    } catch (err: any) {
+      setError(err.message || 'فشل الحصول على نصيحة ذكية حالياً.');
     } finally { setIsAiLoading(false); }
   };
 
@@ -1006,17 +1096,23 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FDFCFB] text-stone-900 font-sans selection:bg-orange-100 pb-24 md:pb-0" dir="rtl">
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-xl border-b border-stone-100 py-3 sm:h-20 flex items-center shadow-sm">
+    <div className="min-h-screen bg-[#FDFCFB] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans selection:bg-orange-100 pb-24 md:pb-0 transition-colors duration-500" dir="rtl">
+      <header className="sticky top-0 z-40 bg-white/95 dark:bg-stone-900/95 backdrop-blur-xl border-b border-stone-100 dark:border-stone-800 py-3 sm:h-20 flex items-center shadow-sm transition-colors">
         <div className="max-w-7xl mx-auto px-4 w-full flex flex-col sm:flex-row items-center justify-between gap-4 sm:gap-3">
-          <div className="flex items-center justify-center sm:justify-start gap-2 shrink-0 sm:order-1 w-full sm:w-auto">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-xl sm:rounded-2xl flex items-center justify-center shadow-md rotate-3 transition-transform overflow-hidden">
+          <div className="flex items-center justify-center sm:justify-start gap-3 shrink-0 sm:order-1 w-full sm:w-auto">
+            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white dark:bg-stone-800 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-md rotate-3 transition-transform overflow-hidden">
               <Logo className="w-full h-full p-1" />
             </div>
             <div className="sm:block hidden">
               <h1 className="text-lg sm:text-xl font-black tracking-tight leading-none mb-0.5">وين يا أبو عبدالله؟</h1>
-              <p className="text-[9px] text-stone-400 font-bold uppercase tracking-widest">اكتشف وجهتك التالية</p>
+              <p className="text-[9px] text-stone-400 dark:text-stone-500 font-bold uppercase tracking-widest">اكتشف وجهتك التالية</p>
             </div>
+            <button 
+              onClick={() => setIsDarkMode(!isDarkMode)}
+              className="w-10 h-10 flex items-center justify-center bg-stone-50 dark:bg-stone-800 text-stone-500 dark:text-stone-400 rounded-xl hover:bg-stone-100 dark:hover:bg-stone-700 transition-all border border-stone-100 dark:border-stone-700"
+            >
+              {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+            </button>
           </div>
           
           <form onSubmit={handleSearch} className="w-full sm:flex-1 sm:max-w-md relative group order-3 sm:order-2">
@@ -1361,81 +1457,107 @@ export default function App() {
             <p className="text-stone-400 text-sm sm:text-lg max-w-lg mx-auto font-medium">{timeGreeting.subtitle}</p>
         </section>
 
-        <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-6 px-1 scroll-smooth touch-pan-x mb-8">
-            <button 
-              onClick={() => { setFilter('all'); setShowFavoritesOnly(false); setSortFilter('none'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'all' && sortFilter === 'none' && !showFavoritesOnly ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-stone-400 border border-stone-100'}`}
-            >
-              الكل
-            </button>
-            <button 
-              onClick={() => { setFilter('restaurant'); setSortFilter('none'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'restaurant' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-stone-400 border border-stone-100'}`}
-            >
-              مطاعم
-            </button>
-            <button 
-              onClick={() => { setFilter('cafe'); setSortFilter('none'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'cafe' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-stone-400 border border-stone-100'}`}
-            >
-              مقاهي
-            </button>
-            
-            <button 
-              onClick={() => { setSortFilter('nearby_10'); setFilter('all'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'nearby_10' ? 'bg-blue-500 text-white shadow-lg' : 'bg-white text-blue-500 border border-blue-50 hover:bg-blue-50'}`}
-            >
-              <Navigation size={14} />
-              أقرب 10
-            </button>
-            <button 
-              onClick={() => { setSortFilter('trending'); setFilter('all'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'trending' ? 'bg-emerald-500 text-white shadow-lg' : 'bg-white text-emerald-500 border border-emerald-50 hover:bg-emerald-50'}`}
-            >
-              <Zap size={14} />
-              هبّة جديدة
-            </button>
-            
-            <div className="h-8 w-px bg-stone-100 mx-2 flex-shrink-0" />
-            
-            <button 
-              onClick={() => { setSortFilter('top_rest'); setFilter('all'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'top_rest' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-white text-amber-600 border border-stone-100 hover:bg-amber-50'}`}
-            >
-              <Award size={14} />
-              أفضل 10 مطاعم
-            </button>
-            <button 
-              onClick={() => { setSortFilter('worst_rest'); setFilter('all'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'worst_rest' ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-white text-rose-400 border border-stone-100 hover:bg-rose-50'}`}
-            >
-              <ThumbsDown size={14} />
-              أقل 10 مطاعم
-            </button>
-            <button 
-              onClick={() => { setSortFilter('top_cafe'); setFilter('all'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'top_cafe' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-white text-amber-600 border border-stone-100 hover:bg-amber-50'}`}
-            >
-              <Award size={14} />
-              أفضل 10 مقاهي
-            </button>
-            <button 
-              onClick={() => { setSortFilter('worst_cafe'); setFilter('all'); }} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'worst_cafe' ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-white text-rose-400 border border-stone-100 hover:bg-rose-50'}`}
-            >
-              <Frown size={14} />
-              أقل 10 مقاهي
-            </button>
+        <div className="flex flex-col gap-6 mb-8">
+          {/* Manual Search Bar */}
+          <div className="relative group">
+            <div className="absolute inset-y-0 right-0 pr-6 flex items-center pointer-events-none text-stone-400 group-focus-within:text-orange-500 transition-colors">
+              <Search size={22} />
+            </div>
+            <input
+              type="text"
+              placeholder="تبحث عن مطعم معين؟ كافيه هادئ؟ بخاري؟"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-white dark:bg-stone-900 border-2 border-stone-100 dark:border-stone-800 rounded-[2rem] py-5 pr-16 pl-8 text-lg font-bold text-stone-900 dark:text-white placeholder:text-stone-300 dark:placeholder:text-stone-600 focus:outline-none focus:border-orange-500/30 focus:ring-4 focus:ring-orange-500/5 shadow-xl shadow-stone-200/40 dark:shadow-none transition-all text-right"
+              dir="rtl"
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery('')}
+                className="absolute inset-y-0 left-4 flex items-center text-stone-300 hover:text-stone-500"
+              >
+                <X size={20} />
+              </button>
+            )}
+          </div>
 
-            <div className="h-8 w-px bg-stone-100 mx-2 flex-shrink-0" />
-            
-            <button 
-              onClick={() => setShowFavoritesOnly(!showFavoritesOnly)} 
-              className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${showFavoritesOnly ? 'bg-rose-500 text-white shadow-lg' : 'bg-white text-rose-500 border border-rose-100 hover:bg-rose-50'}`}
-            >
-              <Heart size={14} fill={showFavoritesOnly ? "white" : "none"} />
-              مفضلاتي
-            </button>
+          <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2 px-1 scroll-smooth touch-pan-x">
+              <button 
+                onClick={() => { setFilter('all'); setShowFavoritesOnly(false); setSortFilter('none'); setOpenNowOnly(false); setPriceFilter(null); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'all' && sortFilter === 'none' && !showFavoritesOnly && !openNowOnly && priceFilter === null ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
+              >
+                الكل
+              </button>
+              <button 
+                onClick={() => { setFilter('restaurant'); setSortFilter('none'); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'restaurant' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
+              >
+                مطاعم
+              </button>
+              <button 
+                onClick={() => { setFilter('cafe'); setSortFilter('none'); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'cafe' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
+              >
+                مقاهي
+              </button>
+              
+              <div className="h-8 w-px bg-stone-100 dark:bg-stone-800 mx-2 flex-shrink-0" />
+
+              <button 
+                onClick={() => setOpenNowOnly(!openNowOnly)} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${openNowOnly ? 'bg-emerald-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-emerald-200'}`}
+              >
+                <Clock size={14} />
+                المفتوح الآن
+              </button>
+
+              <button 
+                onClick={() => { setSortFilter(sortFilter === 'top_rated' ? 'none' : 'top_rated'); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'top_rated' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/50 shadow-sm' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:bg-amber-50'}`}
+              >
+                <Award size={14} />
+                الأعلى تقييماً
+              </button>
+
+              <button 
+                onClick={() => { setSortFilter(sortFilter === 'nearby' ? 'none' : 'nearby'); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'nearby' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-900/50 shadow-sm' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:bg-blue-50'}`}
+              >
+                <Navigation size={14} />
+                الأقرب منك
+              </button>
+
+              <div className="h-8 w-px bg-stone-100 dark:bg-stone-800 mx-2 flex-shrink-0" />
+
+              <div className="flex items-center p-1 bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 rounded-full shadow-sm">
+                {[
+                  { level: 1, label: 'رخيص' },
+                  { level: 2, label: 'متوسط' },
+                  { level: 3, label: 'مرتفع' },
+                  { level: 4, label: 'فاخر' }
+                ].map((p) => (
+                  <button 
+                    key={p.level}
+                    onClick={() => setPriceFilter(priceFilter === p.level ? null : p.level)}
+                    className={`px-4 h-10 rounded-full flex items-center justify-center transition-all gap-1.5 ${priceFilter === p.level ? 'bg-stone-900 dark:bg-orange-500 text-white shadow-lg scale-105 active:scale-95' : 'text-stone-400 dark:text-stone-500 hover:text-stone-600 dark:hover:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800'}`}
+                  >
+                    <span className="text-[10px] font-black whitespace-nowrap">
+                      {p.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="h-8 w-px bg-stone-100 dark:bg-stone-800 mx-2 flex-shrink-0" />
+              
+              <button 
+                onClick={() => setShowFavoritesOnly(!showFavoritesOnly)} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${showFavoritesOnly ? 'bg-rose-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:bg-rose-50'}`}
+              >
+                <Heart size={14} fill={showFavoritesOnly ? "white" : "none"} />
+                مفضلاتي
+              </button>
+          </div>
         </div>
 
         {viewMode === 'map' ? (
@@ -1466,24 +1588,24 @@ export default function App() {
                           whileHover={{ y: -8, scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
                           onClick={() => place.place_id && getPlaceDetails(place.place_id)} 
-                          className="bg-white rounded-[2.2rem] p-4 border border-stone-100 hover:shadow-2xl transition-all duration-300 cursor-pointer flex flex-col group overflow-hidden"
+                          className="bg-white dark:bg-stone-900 rounded-[2.2rem] p-4 border border-stone-100 dark:border-stone-800 hover:shadow-2xl transition-all duration-300 cursor-pointer flex flex-col group overflow-hidden"
                       >
-                          <div className="relative aspect-[16/11] rounded-[1.8rem] mb-4 overflow-hidden bg-stone-50">
-                              {place.photos?.[0] ? <img src={place.photos[0].getUrl({ maxWidth: 600 })} alt={place.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" /> : <div className="w-full h-full flex items-center justify-center text-stone-200"><Utensils size={40} /></div>}
-                              <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm text-xs font-black"><Star size={12} className="text-amber-500 fill-amber-500" />{place.rating || '---'}</div>
-                              <button onClick={(e) => toggleFavorite(e, place.place_id || '')} className={`absolute top-3 right-3 w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${favorites.includes(place.place_id || '') ? 'bg-rose-500 text-white scale-110' : 'bg-white/80 text-stone-400 hover:bg-white hover:text-rose-500'}`}><Heart size={18} fill={favorites.includes(place.place_id || '') ? 'currentColor' : 'none'} /></button>
+                          <div className="relative aspect-[16/11] rounded-[1.8rem] mb-4 overflow-hidden bg-stone-50 dark:bg-stone-800">
+                              {place.photos?.[0] ? <img src={place.photos[0].getUrl({ maxWidth: 600 })} alt={place.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" /> : <div className="w-full h-full flex items-center justify-center text-stone-200 dark:text-stone-700"><Utensils size={40} /></div>}
+                              <div className="absolute top-3 left-3 bg-white/95 dark:bg-stone-800/95 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm text-xs font-black text-stone-900 dark:text-white"><Star size={12} className="text-amber-500 fill-amber-500" />{place.rating || '---'}</div>
+                              <button onClick={(e) => toggleFavorite(e, place.place_id || '')} className={`absolute top-3 right-3 w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${favorites.includes(place.place_id || '') ? 'bg-rose-500 text-white scale-110' : 'bg-white/80 dark:bg-stone-700/80 text-stone-400 dark:text-stone-500 hover:bg-white dark:hover:bg-stone-600 hover:text-rose-500'}`}><Heart size={18} fill={favorites.includes(place.place_id || '') ? 'currentColor' : 'none'} /></button>
                               {place.distance !== undefined && (
                                 <div className="absolute bottom-3 right-3 bg-stone-900/80 backdrop-blur-md text-white px-3 py-1.5 rounded-xl text-[10px] font-black">يبعد {place.distance.toFixed(1)} كم</div>
                               )}
                           </div>
-                          <h3 className="text-xl font-black text-stone-900 group-hover:text-orange-500 transition-colors mb-1 truncate">{place.name}</h3>
-                          <p className="text-[11px] text-stone-400 font-bold truncate mb-4">{place.vicinity}</p>
-                          <div className="mt-auto pt-4 border-t border-stone-50 flex items-center justify-between text-[11px] font-black">
+                          <h3 className="text-xl font-black text-stone-900 dark:text-white group-hover:text-orange-500 transition-colors mb-1 truncate">{place.name}</h3>
+                          <p className="text-[11px] text-stone-400 dark:text-stone-500 font-bold truncate mb-4">{place.vicinity}</p>
+                          <div className="mt-auto pt-4 border-t border-stone-50 dark:border-stone-800 flex items-center justify-between text-[11px] font-black">
                               <span className={isPlaceOpen(place) === true ? 'text-emerald-500 flex items-center gap-1' : isPlaceOpen(place) === false ? 'text-rose-400 flex items-center gap-1' : 'text-stone-400 flex items-center gap-1'}>
                                 <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : isPlaceOpen(place) === false ? 'bg-rose-400' : 'bg-stone-300'}`} />
                                 {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
                               </span>
-                              <div className="bg-stone-50 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 group-hover:text-white transition-all"> <ChevronRight size={16} className="rotate-180" /> </div>
+                              <div className="bg-stone-50 dark:bg-stone-800 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 dark:text-stone-600 group-hover:text-white transition-all"> <ChevronRight size={16} className="rotate-180" /> </div>
                           </div>
                       </motion.div>
                   ))
@@ -1511,21 +1633,21 @@ export default function App() {
                initial={{ scale: 0.5, opacity: 0, rotate: -10 }} 
                animate={{ scale: 1, opacity: 1, rotate: 0 }} 
                exit={{ scale: 0.5, opacity: 0, rotate: 10 }}
-               className="bg-white w-full max-w-sm rounded-[3rem] p-10 shadow-2xl relative z-10 text-center overflow-hidden"
+               className="bg-white dark:bg-stone-900 w-full max-w-sm rounded-[3rem] p-10 shadow-2xl relative z-10 text-center overflow-hidden border border-stone-100 dark:border-stone-800"
              >
                 <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-emerald-400 to-teal-500" />
-                <div className="w-24 h-24 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner">
+                <div className="w-24 h-24 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner">
                   <Trophy size={48} className="animate-bounce" />
                 </div>
-                <h2 className="text-sm font-black text-emerald-600 uppercase tracking-[0.3em] mb-4">اختيار الحظ الفائز!</h2>
-                <h3 className="text-3xl font-black text-stone-900 mb-2 leading-tight">{luckyPlace.name}</h3>
+                <h2 className="text-sm font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-[0.3em] mb-4">اختيار الحظ الفائز!</h2>
+                <h3 className="text-3xl font-black text-stone-900 dark:text-white mb-2 leading-tight">{luckyPlace.name}</h3>
                 <div className="flex items-center justify-center gap-2 mb-8">
-                  <div className="flex items-center gap-1 text-amber-500 bg-amber-50 px-3 py-1 rounded-full text-sm font-black">
+                  <div className="flex items-center gap-1 text-amber-500 bg-amber-50 dark:bg-amber-900/20 px-3 py-1 rounded-full text-sm font-black">
                     <Star size={14} className="fill-amber-500" />
                     {luckyPlace.rating}
                   </div>
                   {luckyPlace.distance !== undefined && (
-                    <div className="text-stone-400 text-xs font-bold">على بعد {luckyPlace.distance.toFixed(1)} كم</div>
+                    <div className="text-stone-400 dark:text-stone-500 text-xs font-bold">على بعد {luckyPlace.distance.toFixed(1)} كم</div>
                   )}
                 </div>
                 
@@ -1554,26 +1676,128 @@ export default function App() {
         {selectedPlace && (
           <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedPlace(null)} className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} className="relative w-full max-w-4xl max-h-[90vh] bg-[#FDFCFB] rounded-t-[2.5rem] sm:rounded-[3rem] shadow-2xl flex flex-col sm:flex-row overflow-hidden">
-                <div className="w-full sm:w-1/2 aspect-square sm:aspect-auto sm:h-full bg-stone-100 relative">
-                    {selectedPlace.photos?.[activePhotoIndex] && <img src={selectedPlace.photos[activePhotoIndex].getUrl({ maxWidth: 800 })} className="w-full h-full object-cover" alt="place" />}
-                    <button onClick={() => setSelectedPlace(null)} className="absolute top-6 left-6 w-10 h-10 bg-white/80 rounded-full flex items-center justify-center text-stone-900 shadow-lg"><X size={20} /></button>
+            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} className="relative w-full max-w-4xl max-h-[90vh] bg-[#FDFCFB] dark:bg-stone-900 rounded-t-[2.5rem] sm:rounded-[3rem] shadow-2xl flex flex-col sm:flex-row overflow-hidden">
+                <div className="w-full sm:w-1/2 aspect-square sm:aspect-auto sm:h-full bg-stone-100 dark:bg-stone-800 relative group">
+                    {selectedPlace.photos?.[activePhotoIndex] && (
+                      <motion.img 
+                        key={activePhotoIndex}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        src={selectedPlace.photos[activePhotoIndex].getUrl({ maxWidth: 800 })} 
+                        className="w-full h-full object-cover" 
+                        alt="place" 
+                      />
+                    )}
+                    
+                    {selectedPlace.photos && selectedPlace.photos.length > 1 && (
+                      <div className="absolute inset-x-0 bottom-6 flex justify-center gap-2 px-6">
+                        <div className="flex gap-2 bg-black/20 backdrop-blur-md p-1.5 rounded-full">
+                          {selectedPlace.photos.slice(0, 5).map((_, i) => (
+                            <button 
+                              key={i}
+                              onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(i); }}
+                              className={`w-2 h-2 rounded-full transition-all ${i === activePhotoIndex ? 'bg-white w-4' : 'bg-white/40'}`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedPlace.photos && selectedPlace.photos.length > 1 && (
+                      <>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(prev => prev > 0 ? prev - 1 : selectedPlace.photos!.length - 1); }}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/80 rounded-full flex items-center justify-center text-stone-900 shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <ChevronRight size={20} />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(prev => prev < selectedPlace.photos!.length - 1 ? prev + 1 : 0); }}
+                          className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/80 rounded-full flex items-center justify-center text-stone-900 shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <ChevronLeft size={20} />
+                        </button>
+                      </>
+                    )}
+
+                    <button onClick={() => setSelectedPlace(null)} className="absolute top-6 left-6 w-10 h-10 bg-white/80 rounded-full flex items-center justify-center text-stone-900 shadow-lg z-10"><X size={20} /></button>
                 </div>
                 <div className="w-full sm:w-1/2 p-6 sm:p-10 overflow-y-auto no-scrollbar text-right">
-                    <h2 className="text-3xl font-black text-stone-900 mb-2">{selectedPlace.name}</h2>
-                    <p className="text-sm font-medium text-stone-500 mb-6">{selectedPlace.formatted_address}</p>
-                    <div className="grid grid-cols-2 gap-4 mb-8">
-                        <div className="bg-stone-50 p-5 rounded-3xl text-center border border-stone-100 shadow-sm"><p className="text-[10px] font-black text-stone-400 uppercase tracking-widest mb-1">تقييم غوغل</p><p className="text-lg font-black">{selectedPlace.rating || '---'}</p></div>
-                        <button onClick={() => setShowSpecialRatingModal(true)} className="bg-stone-900 p-5 rounded-3xl text-center text-white shadow-xl"><p className="text-[10px] font-black text-white/40 uppercase mb-1">التقييم الذكي</p><p className="text-lg font-black text-orange-400">{selectedPlace.internalRating?.toFixed(1) || '---'}</p></button>
+                    <div className="mb-6">
+                      <h2 className="text-3xl font-black text-stone-900 dark:text-white mb-2">{selectedPlace.name}</h2>
+                      <div className="flex items-center justify-end gap-2 text-stone-500 dark:text-stone-400">
+                        <p className="text-sm font-medium">{selectedPlace.formatted_address}</p>
+                        <MapPin size={16} className="flex-shrink-0 text-stone-300 dark:text-stone-600" />
+                      </div>
                     </div>
-                    <a href={selectedPlace.url} target="_blank" rel="noopener noreferrer" className="w-full py-5 bg-stone-900 text-white rounded-[1.5rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-all text-sm uppercase tracking-widest"><Navigation size={20} />توجيه عبر غوغل مابس</a>
+
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                        <div className="bg-stone-50 dark:bg-stone-800 p-5 rounded-3xl text-center border border-stone-100 dark:border-stone-700 shadow-sm">
+                          <p className="text-[10px] font-black text-stone-400 dark:text-stone-500 uppercase tracking-widest mb-1">تقييم غوغل</p>
+                          <div className="flex items-center justify-center gap-1">
+                            <span className="text-lg font-black text-stone-900 dark:text-white">{selectedPlace.rating || '---'}</span>
+                            <Star size={16} className="text-amber-400 fill-amber-400" />
+                          </div>
+                        </div>
+                        <button onClick={() => setShowSpecialRatingModal(true)} className="bg-stone-900 dark:bg-stone-800 p-5 rounded-3xl text-center text-white shadow-xl hover:scale-[1.02] transition-transform border border-stone-800 dark:border-stone-700">
+                          <p className="text-[10px] font-black text-white/40 uppercase mb-1">التقييم الذكي</p>
+                          <p className="text-lg font-black text-orange-400">{selectedPlace.internalRating?.toFixed(1) || '---'}</p>
+                        </button>
+                    </div>
+
+                    <div className="flex flex-col gap-3 mb-10">
+                      <a 
+                        href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${selectedPlace.place_id}`}
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="w-full py-5 bg-orange-500 text-white rounded-[1.5rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-all text-sm shadow-lg shadow-orange-500/20"
+                      >
+                        <Navigation size={20} />
+                        فتح في خرائط غوغل
+                      </a>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        {selectedPlace.formatted_phone_number && (
+                          <a 
+                            href={`tel:${selectedPlace.formatted_phone_number}`}
+                            className="py-4 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 text-stone-900 dark:text-white rounded-[1.2rem] font-bold flex items-center justify-center gap-2 active:scale-95 transition-all text-xs"
+                          >
+                            <Phone size={16} className="text-emerald-500" />
+                            اتصال هاتفي
+                          </a>
+                        )}
+                        <button 
+                          onClick={() => handleInviteFriend(selectedPlace)}
+                          className="py-4 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 text-stone-900 dark:text-white rounded-[1.2rem] font-bold flex items-center justify-center gap-2 active:scale-95 transition-all text-xs"
+                        >
+                          <Zap size={16} className="text-orange-500" />
+                          عزيمة خويك
+                        </button>
+                      </div>
+                    </div>
+
+                    {selectedPlace.opening_hours?.weekday_text && (
+                      <div className="mb-10 text-right bg-stone-50/50 dark:bg-stone-800/30 p-6 rounded-[2rem] border border-stone-100 dark:border-stone-800">
+                        <div className="flex items-center justify-end gap-2 mb-4 text-stone-900 dark:text-white">
+                          <h4 className="font-black text-sm">أوقات العمل</h4>
+                          <Clock size={16} />
+                        </div>
+                        <div className="space-y-2">
+                          {selectedPlace.opening_hours.weekday_text.map((day, i) => (
+                            <p key={i} className="text-xs font-medium text-stone-500 dark:text-stone-400">
+                              {day.replace(':', ' - ')}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     
                     <div className="mt-12 space-y-6">
-                        <h4 className="text-[10px] font-black uppercase text-stone-300 tracking-widest border-b pb-2">تفاعل مع المكان</h4>
+                        <h4 className="text-[10px] font-black uppercase text-stone-300 dark:text-stone-600 tracking-widest border-b dark:border-stone-800 pb-2">تفاعل مع المكان</h4>
                         <div className="grid grid-cols-3 gap-4">
-                            <button onClick={() => user ? setShowReviewModal('review') : handleLogin()} className="flex flex-col items-center gap-2 p-4 bg-white border border-stone-100 rounded-3xl hover:border-orange-200 transition-all"><Star size={24} className="text-amber-500" /><span className="text-[10px] font-black">تقييم</span></button>
-                            <button onClick={() => user ? setShowReviewModal('photo') : handleLogin()} className="flex flex-col items-center gap-2 p-4 bg-white border border-stone-100 rounded-3xl hover:border-blue-200 transition-all"><Camera size={24} className="text-blue-500" /><span className="text-[10px] font-black">صور</span></button>
-                            <button onClick={() => user ? setShowReviewModal('review') : handleLogin()} className="flex flex-col items-center gap-2 p-4 bg-white border border-stone-100 rounded-3xl hover:border-emerald-200 transition-all"><MessageSquare size={24} className="text-emerald-500" /><span className="text-[10px] font-black">تجربة</span></button>
+                            <button onClick={() => user ? setShowReviewModal('review') : handleLogin()} className="flex flex-col items-center gap-2 p-4 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-3xl hover:border-orange-200 dark:hover:border-orange-900 transition-all"><Star size={24} className="text-amber-500" /><span className="text-[10px] font-black dark:text-stone-400">تقييم</span></button>
+                            <button onClick={() => user ? setShowReviewModal('photo') : handleLogin()} className="flex flex-col items-center gap-2 p-4 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-3xl hover:border-blue-200 dark:hover:border-blue-900 transition-all"><Camera size={24} className="text-blue-500" /><span className="text-[10px] font-black dark:text-stone-400">صور</span></button>
+                            <button onClick={() => user ? setShowReviewModal('review') : handleLogin()} className="flex flex-col items-center gap-2 p-4 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 rounded-3xl hover:border-emerald-200 dark:hover:border-emerald-900 transition-all"><MessageSquare size={24} className="text-emerald-500" /><span className="text-[10px] font-black dark:text-stone-400">تجربة</span></button>
                         </div>
                     </div>
                 </div>
@@ -1700,10 +1924,106 @@ export default function App() {
         </button>
       </nav>
 
+      {/* Floating Action Buttons */}
+      <div className="fixed bottom-24 left-6 flex flex-col gap-4 z-[60]">
+        <button 
+          onClick={() => {
+            console.log("Opening Wheel...");
+            setShowWheel(true);
+          }}
+          className="w-16 h-16 bg-stone-900 dark:bg-orange-500 text-white rounded-full flex items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.3)] hover:scale-110 active:scale-90 transition-all group relative border-4 border-white dark:border-stone-900"
+          title="وين أروح؟"
+        >
+          <Dices size={28} className="group-hover:rotate-12 transition-transform" />
+          <div className="absolute -top-2 -right-2 bg-rose-500 text-white text-[8px] font-black px-2 py-1 rounded-full animate-bounce">جديد</div>
+        </button>
+      </div>
+
+      {/* Final Simple Modal Implementation */}
+      {showWheel && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          {/* Backdrop */}
+          <div 
+            onClick={() => setShowWheel(false)} 
+            style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', cursor: 'pointer' }}
+          />
+          
+          {/* Content Box */}
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{ position: 'relative', backgroundColor: 'white', width: '100%', maxWidth: '350px', borderRadius: '40px', padding: '40px 30px', textAlign: 'center', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', border: '1px solid #e5e7eb' }}
+          >
+            <div style={{ width: '80px', height: '80px', backgroundColor: '#fff7ed', borderRadius: '50%', margin: '0 auto 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '4px solid #ffedd5' }}>
+              <Dices size={40} color="#f97316" className={isSpinning ? 'animate-spin' : ''} />
+            </div>
+
+            <h3 style={{ fontSize: '24px', fontWeight: 900, color: '#1c1917', marginBottom: '8px' }}>وين تبينا نوديك؟</h3>
+            <p style={{ fontSize: '11px', color: '#78716c', marginBottom: '32px', fontWeight: 600 }}>أبو عبدالله بيختار لك أفضل مكان!</p>
+
+            {winnerPlace ? (
+              <div style={{ animation: 'scaleIn 0.3s ease-out' }}>
+                <div style={{ backgroundColor: '#fff7ed', padding: '20px', borderRadius: '24px', marginBottom: '24px', border: '1px solid #ffedd5' }}>
+                  <p style={{ fontSize: '10px', fontWeight: 900, color: '#f97316', textTransform: 'uppercase', marginBottom: '4px' }}>الوجهة المختارة:</p>
+                  <h4 style={{ fontSize: '18px', fontWeight: 900, color: '#1c1917' }}>{winnerPlace.name}</h4>
+                </div>
+                <button 
+                  onClick={() => { setSelectedPlace(winnerPlace); setShowWheel(false); setWinnerPlace(null); }}
+                  style={{ width: '100%', padding: '16px', backgroundColor: '#1c1917', color: 'white', borderRadius: '16px', fontWeight: 900, border: 'none', cursor: 'pointer', marginBottom: '12px' }}
+                >
+                  وديني هناك الحين!
+                </button>
+                <button 
+                  onClick={() => setWinnerPlace(null)}
+                  style={{ backgroundColor: 'transparent', border: 'none', color: '#a8a29e', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  مو عاجبني.. غيره
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <button 
+                  type="button"
+                  disabled={isSpinning}
+                  onClick={() => {
+                    console.log("Spin button clicked");
+                    handleSpin();
+                  }}
+                  style={{ 
+                    width: '100%', 
+                    padding: '20px', 
+                    backgroundColor: isSpinning ? '#f5f5f4' : '#f97316', 
+                    color: isSpinning ? '#d6d3d1' : 'white', 
+                    borderRadius: '24px', 
+                    fontSize: '18px', 
+                    fontWeight: 900, 
+                    border: 'none', 
+                    cursor: 'pointer', 
+                    boxShadow: '0 10px 15px -3px rgba(249, 115, 22, 0.3)',
+                    WebkitTapHighlightColor: 'transparent',
+                    touchAction: 'manipulation'
+                  }}
+                >
+                  {isSpinning ? 'تحري الجودة...' : 'اختار لي مكان! 🎲'}
+                </button>
+                
+                <button 
+                  onClick={() => setShowWheel(false)}
+                  style={{ backgroundColor: 'transparent', border: 'none', color: '#a8a29e', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '1px', cursor: 'pointer' }}
+                >
+                  إغلاق
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <style>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         .mask-fade-edges { mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent); }
+        .animate-spin-slow { animation: spin 3s linear infinite; }
+        .dark { color-scheme: dark; }
       `}</style>
     </div>
   );

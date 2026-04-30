@@ -25,15 +25,22 @@ async function startServer() {
       }
 
       const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      
+      console.log("Generating AI recommendation with prompt length:", prompt?.length);
+      
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
       
+      console.log("AI Recommendation generated successfully");
       res.json({ text });
     } catch (error: any) {
-      console.error("AI Error:", error);
-      res.status(500).json({ error: error.message });
+      console.error("AI Error details:", error);
+      res.status(500).json({ 
+        error: "حدث خطأ في معالجة النصيحة الذكية",
+        details: error.message 
+      });
     }
   });
 
