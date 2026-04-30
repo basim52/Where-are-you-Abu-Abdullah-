@@ -87,8 +87,19 @@ import {
 } from 'firebase/firestore';
 import { GoogleGenAI } from "@google/genai";
 
-// Initialize AI
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Initialize AI lazily to prevent crash if key is missing
+let aiInstance: any = null;
+const getAI = () => {
+  if (!aiInstance) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn("GEMINI_API_KEY is missing. AI features will be disabled.");
+      return null;
+    }
+    aiInstance = new GoogleGenAI({ apiKey });
+  }
+  return aiInstance;
+};
 
 // Types for Google Maps Places
 interface PlaceDetail extends google.maps.places.PlaceResult {
@@ -118,7 +129,7 @@ interface Visit {
   rated: boolean;
 }
 
-const GOOGLE_MAPS_API_KEY = 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
 
 export default function App() {
   const [isMapsLoaded, setIsMapsLoaded] = useState<boolean>(false);
@@ -904,12 +915,17 @@ export default function App() {
       5. لا تذكر قائمة طويلة، ركز على واحد فقط وابهر المستخدم بوصفك.
       6. أنهِ ردك بذكر ID المكان المختار في سطر منفصل تماماً بصيغة "ID: [placeId]".`;
 
-      const response = await ai.models.generateContent({ 
-        model: "gemini-3-flash-preview", 
-        contents: [{ role: 'user', parts: [{ text: prompt }] }] 
-      });
-      
-      const text = response.text || 'لا يوجد اقتراح حالياً.';
+      const aiSvc = getAI();
+      if (!aiSvc) {
+        setAiRecommendation('عذراً، خدمة الذكاء الاصطناعي غير متوفرة حالياً. حاول التحقق من إعدادات مفتاح API.');
+        setIsAiLoading(false);
+        return;
+      }
+
+      const model = aiSvc.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
       const idMatch = text.match(/ID:\s*([a-zA-Z0-9_-]+)/);
       const cleanedText = text.replace(/ID:\s*[a-zA-Z0-9_-]+/, '').trim();
       
