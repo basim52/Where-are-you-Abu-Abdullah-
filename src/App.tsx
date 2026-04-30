@@ -85,21 +85,8 @@ import {
   getDocs,
   Timestamp
 } from 'firebase/firestore';
-import { GoogleGenAI } from "@google/genai";
+// AI calls moved to server-side
 
-// Initialize AI lazily to prevent crash if key is missing
-let aiInstance: any = null;
-const getAI = () => {
-  if (!aiInstance) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.warn("GEMINI_API_KEY is missing. AI features will be disabled.");
-      return null;
-    }
-    aiInstance = new GoogleGenAI({ apiKey });
-  }
-  return aiInstance;
-};
 
 // Types for Google Maps Places
 interface PlaceDetail extends google.maps.places.PlaceResult {
@@ -915,17 +902,18 @@ export default function App() {
       5. لا تذكر قائمة طويلة، ركز على واحد فقط وابهر المستخدم بوصفك.
       6. أنهِ ردك بذكر ID المكان المختار في سطر منفصل تماماً بصيغة "ID: [placeId]".`;
 
-      const aiSvc = getAI();
-      if (!aiSvc) {
-        setAiRecommendation('عذراً، خدمة الذكاء الاصطناعي غير متوفرة حالياً. حاول التحقق من إعدادات مفتاح API.');
-        setIsAiLoading(false);
-        return;
+      const aiRes = await fetch('/api/ai/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+
+      if (!aiRes.ok) {
+        throw new Error('فشل الاتصال بخدمة الذكاء الاصطناعي');
       }
 
-      const model = aiSvc.getGenerativeModel({ model: "gemini-2.0-flash" });
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const aiData = await aiRes.json();
+      const text = aiData.text || 'لا يوجد اقتراح حالياً.';
       const idMatch = text.match(/ID:\s*([a-zA-Z0-9_-]+)/);
       const cleanedText = text.replace(/ID:\s*[a-zA-Z0-9_-]+/, '').trim();
       
