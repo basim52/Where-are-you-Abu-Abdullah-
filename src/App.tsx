@@ -1066,12 +1066,12 @@ export default function App() {
         </div>
       </header>
 
-      {apiKeyError && GOOGLE_MAPS_API_KEY && (
+      {error && (
         <div className="bg-rose-50 border-b border-rose-100 p-4 sticky top-20 z-30">
           <div className="max-w-7xl mx-auto flex items-center gap-3 text-rose-600">
             <Info size={18} className="shrink-0" />
             <div className="text-xs font-bold">
-              {error}
+              {error} {apiKeyError && !GOOGLE_MAPS_API_KEY && 'يرجى إضافة مفتاح Google Maps في الإعدادات.'}
             </div>
           </div>
         </div>
@@ -1361,7 +1361,7 @@ export default function App() {
             <p className="text-stone-400 text-sm sm:text-lg max-w-lg mx-auto font-medium">{timeGreeting.subtitle}</p>
         </section>
 
-        <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-6 px-1 scroll-smooth touch-pan-x">
+        <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-6 px-1 scroll-smooth touch-pan-x mb-8">
             <button 
               onClick={() => { setFilter('all'); setShowFavoritesOnly(false); setSortFilter('none'); }} 
               className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'all' && sortFilter === 'none' && !showFavoritesOnly ? 'bg-orange-500 text-white shadow-lg' : 'bg-white text-stone-400 border border-stone-100'}`}
@@ -1402,7 +1402,7 @@ export default function App() {
               onClick={() => { setSortFilter('top_rest'); setFilter('all'); }} 
               className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${sortFilter === 'top_rest' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-white text-amber-600 border border-stone-100 hover:bg-amber-50'}`}
             >
-              <Trophy size={14} />
+              <Award size={14} />
               أفضل 10 مطاعم
             </button>
             <button 
@@ -1438,39 +1438,69 @@ export default function App() {
             </button>
         </div>
 
-        <section className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-8">
-            {loading ? (
-                Array.from({ length: 6 }).map((_, i) => <div key={i} className="aspect-[16/10] bg-stone-100 rounded-[2rem] animate-pulse" />)
-            ) : (
-                displayPlaces.map((place) => (
-                    <motion.div 
-                        key={place.place_id} 
-                        whileHover={{ y: -8, scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        onClick={() => place.place_id && getPlaceDetails(place.place_id)} 
-                        className="bg-white rounded-[2.2rem] p-4 border border-stone-100 hover:shadow-2xl transition-all duration-300 cursor-pointer flex flex-col group overflow-hidden"
-                    >
-                        <div className="relative aspect-[16/11] rounded-[1.8rem] mb-4 overflow-hidden bg-stone-50">
-                            {place.photos?.[0] ? <img src={place.photos[0].getUrl({ maxWidth: 600 })} alt={place.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" /> : <div className="w-full h-full flex items-center justify-center text-stone-200"><Utensils size={40} /></div>}
-                            <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm text-xs font-black"><Star size={12} className="text-amber-500 fill-amber-500" />{place.rating || '---'}</div>
-                            <button onClick={(e) => toggleFavorite(e, place.place_id || '')} className={`absolute top-3 right-3 w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${favorites.includes(place.place_id || '') ? 'bg-rose-500 text-white scale-110' : 'bg-white/80 text-stone-400 hover:bg-white hover:text-rose-500'}`}><Heart size={18} fill={favorites.includes(place.place_id || '') ? 'currentColor' : 'none'} /></button>
-                            {place.distance !== undefined && (
-                              <div className="absolute bottom-3 right-3 bg-stone-900/80 backdrop-blur-md text-white px-3 py-1.5 rounded-xl text-[10px] font-black">يبعد {place.distance.toFixed(1)} كم</div>
-                            )}
-                        </div>
-                        <h3 className="text-xl font-black text-stone-900 group-hover:text-orange-500 transition-colors mb-1 truncate">{place.name}</h3>
-                        <p className="text-[11px] text-stone-400 font-bold truncate mb-4">{place.vicinity}</p>
-                        <div className="mt-auto pt-4 border-t border-stone-50 flex items-center justify-between text-[11px] font-black">
-                            <span className={isPlaceOpen(place) === true ? 'text-emerald-500 flex items-center gap-1' : isPlaceOpen(place) === false ? 'text-rose-400 flex items-center gap-1' : 'text-stone-400 flex items-center gap-1'}>
-                              <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : isPlaceOpen(place) === false ? 'bg-rose-400' : 'bg-stone-300'}`} />
-                              {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
-                            </span>
-                            <div className="bg-stone-50 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 group-hover:text-white transition-all"> <ChevronRight size={16} className="rotate-180" /> </div>
-                        </div>
-                    </motion.div>
-                ))
+        {viewMode === 'map' ? (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }} 
+            animate={{ opacity: 1, scale: 1 }} 
+            className="w-full h-[600px] bg-stone-100 rounded-[3rem] overflow-hidden shadow-2xl border-4 border-white relative"
+          >
+            <div ref={mapContainerRef} className="w-full h-full" />
+            {!userLocation && (
+              <div className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-6 text-center">
+                 <div className="bg-white p-8 rounded-[2.5rem] shadow-xl max-w-xs">
+                    <MapPinOff size={40} className="text-stone-300 mx-auto mb-4" />
+                    <p className="text-sm font-black text-stone-900 mb-4">نحتاج موقعك عشان نظهر الخريطة يا غالي</p>
+                    <button onClick={requestLocation} className="px-6 py-3 bg-stone-900 text-white rounded-xl font-bold text-xs">تفعيل الموقع</button>
+                 </div>
+              </div>
             )}
-        </section>
+          </motion.div>
+        ) : (
+          <section className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-8">
+              {loading ? (
+                  Array.from({ length: 6 }).map((_, i) => <div key={i} className="aspect-[16/10] bg-stone-100 rounded-[2rem] animate-pulse" />)
+              ) : displayPlaces.length > 0 ? (
+                  displayPlaces.map((place) => (
+                      <motion.div 
+                          key={place.place_id} 
+                          whileHover={{ y: -8, scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={() => place.place_id && getPlaceDetails(place.place_id)} 
+                          className="bg-white rounded-[2.2rem] p-4 border border-stone-100 hover:shadow-2xl transition-all duration-300 cursor-pointer flex flex-col group overflow-hidden"
+                      >
+                          <div className="relative aspect-[16/11] rounded-[1.8rem] mb-4 overflow-hidden bg-stone-50">
+                              {place.photos?.[0] ? <img src={place.photos[0].getUrl({ maxWidth: 600 })} alt={place.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" /> : <div className="w-full h-full flex items-center justify-center text-stone-200"><Utensils size={40} /></div>}
+                              <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm text-xs font-black"><Star size={12} className="text-amber-500 fill-amber-500" />{place.rating || '---'}</div>
+                              <button onClick={(e) => toggleFavorite(e, place.place_id || '')} className={`absolute top-3 right-3 w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md transition-all ${favorites.includes(place.place_id || '') ? 'bg-rose-500 text-white scale-110' : 'bg-white/80 text-stone-400 hover:bg-white hover:text-rose-500'}`}><Heart size={18} fill={favorites.includes(place.place_id || '') ? 'currentColor' : 'none'} /></button>
+                              {place.distance !== undefined && (
+                                <div className="absolute bottom-3 right-3 bg-stone-900/80 backdrop-blur-md text-white px-3 py-1.5 rounded-xl text-[10px] font-black">يبعد {place.distance.toFixed(1)} كم</div>
+                              )}
+                          </div>
+                          <h3 className="text-xl font-black text-stone-900 group-hover:text-orange-500 transition-colors mb-1 truncate">{place.name}</h3>
+                          <p className="text-[11px] text-stone-400 font-bold truncate mb-4">{place.vicinity}</p>
+                          <div className="mt-auto pt-4 border-t border-stone-50 flex items-center justify-between text-[11px] font-black">
+                              <span className={isPlaceOpen(place) === true ? 'text-emerald-500 flex items-center gap-1' : isPlaceOpen(place) === false ? 'text-rose-400 flex items-center gap-1' : 'text-stone-400 flex items-center gap-1'}>
+                                <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : isPlaceOpen(place) === false ? 'bg-rose-400' : 'bg-stone-300'}`} />
+                                {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
+                              </span>
+                              <div className="bg-stone-50 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 group-hover:text-white transition-all"> <ChevronRight size={16} className="rotate-180" /> </div>
+                          </div>
+                      </motion.div>
+                  ))
+              ) : (
+                <div className="col-span-full py-20 text-center">
+                   <div className="w-24 h-24 bg-stone-50 rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 text-stone-200">
+                     <Search size={40} />
+                   </div>
+                   <h3 className="text-xl font-black text-stone-900 mb-2">ما لقيت شي حولك يا غالي</h3>
+                   <p className="text-stone-400 text-sm max-w-xs mx-auto">جرب تغير الفلتر أو تبحث عن مكان ثاني، أو يمكن تحتاج تفعل الموقع؟</p>
+                   {!userLocation && (
+                     <button onClick={requestLocation} className="mt-6 px-8 py-3 bg-stone-900 text-white rounded-2xl font-black text-xs shadow-lg">تفعيل الموقع</button>
+                   )}
+                </div>
+              )}
+          </section>
+        )}
       </main>
 
       <AnimatePresence>
