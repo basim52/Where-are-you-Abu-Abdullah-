@@ -1,0 +1,8 @@
+{
+  "name": "وين يا أبو عبدالله؟",
+  "description": "دليلك الذكي لاكتشاف أفضل المطاعم والمقاهي، بتقييمات حصرية وتجربة مستخدم مميزة.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}

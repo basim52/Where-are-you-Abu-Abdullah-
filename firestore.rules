@@ -1,0 +1,92 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Review validation
+    function isValidReview(data) {
+      return data.keys().hasAll(['placeId', 'userId', 'userName', 'userPhoto', 'rating', 'createdAt']) &&
+             data.keys().size() <= 8 &&
+             data.placeId is string && data.placeId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.userName is string && data.userName.size() <= 256 &&
+             data.userPhoto is string && data.userPhoto.size() <= 2048 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.createdAt == request.time &&
+             (!('comment' in data) || (data.comment is string && data.comment.size() <= 5000)) &&
+             (!('photoBase64' in data) || (data.photoBase64 is string && data.photoBase64.size() <= 2097152)); // 2MB limit
+    }
+
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId);
+      allow list: if true; 
+      allow create: if isSignedIn() && isValidId(reviewId) && isValidReview(incoming());
+      allow update: if isOwner(resource.data.userId) && 
+                      isValidId(reviewId) && 
+                      isValidReview(incoming()) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['comment', 'rating', 'photoBase64']);
+      allow delete: if isOwner(resource.data.userId) && isValidId(reviewId);
+    }
+
+    // Favorite validation
+    function isValidFavorite(data) {
+      return data.keys().hasAll(['userId', 'placeId', 'createdAt']) &&
+             data.keys().size() == 3 &&
+             data.userId == request.auth.uid &&
+             data.placeId is string && data.placeId.size() <= 128 &&
+             data.createdAt == request.time;
+    }
+
+    match /favorites/{favoriteId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(favoriteId) && isValidFavorite(incoming());
+      allow delete: if isOwner(resource.data.userId) && isValidId(favoriteId);
+    }
+
+    // Visit validation
+    function isValidVisit(data) {
+      return data.keys().hasAll(['userId', 'placeId', 'timestamp']) &&
+             data.keys().size() <= 6 &&
+             data.userId == request.auth.uid &&
+             data.placeId is string && data.placeId.size() <= 128 &&
+             data.timestamp == request.time &&
+             (!('placeName' in data) || (data.placeName is string && data.placeName.size() <= 256)) &&
+             (!('rated' in data) || (data.rated is bool));
+    }
+
+    match /visits/{visitId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(visitId) && isValidVisit(incoming());
+      allow update: if isOwner(resource.data.userId) && 
+                      isValidId(visitId) && 
+                      isValidVisit(incoming()) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['rated']);
+      allow delete: if isOwner(resource.data.userId) && isValidId(visitId);
+    }
+  }
+}

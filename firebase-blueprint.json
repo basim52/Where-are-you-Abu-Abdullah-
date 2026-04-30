@@ -1,0 +1,58 @@
+{
+  "entities": {
+    "Review": {
+      "title": "Internal Place Review",
+      "description": "User generated review for a specific place within the app.",
+      "type": "object",
+      "properties": {
+        "placeId": { "type": "string", "description": "The Google Maps Place ID" },
+        "userId": { "type": "string", "description": "The Firebase Auth UID of the reviewer" },
+        "userName": { "type": "string", "description": "The display name of the reviewer" },
+        "userPhoto": { "type": "string", "description": "The profile photo URL of the reviewer" },
+        "rating": { "type": "number", "description": "Rating from 1 to 5" },
+        "comment": { "type": "string", "description": "Textual review content" },
+        "photoBase64": { "type": "string", "description": "Optional attached photo in base64 format" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the review was created" }
+      },
+      "required": ["placeId", "userId", "rating", "createdAt"]
+    },
+    "Favorite": {
+      "title": "User Favorite Place",
+      "description": "A place saved by a user for quick access.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The Firebase Auth UID of the user" },
+        "placeId": { "type": "string", "description": "The Google Maps Place ID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the favorite was added" }
+      },
+      "required": ["userId", "placeId", "createdAt"]
+    },
+    "Visit": {
+      "title": "User Visit Record",
+      "description": "Track places a user has looked at to remind them to rate later.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The Firebase Auth UID of the user" },
+        "placeId": { "type": "string", "description": "The Google Maps Place ID" },
+        "placeName": { "type": "string", "description": "Name of the place visited" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the visit occurred" },
+        "rated": { "type": "boolean", "description": "Whether this visit has been rated" }
+      },
+      "required": ["userId", "placeId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Global collection of all user reviews"
+    },
+    "/favorites/{favoriteId}": {
+      "schema": "Favorite",
+      "description": "User specific favorite places"
+    },
+    "/visits/{visitId}": {
+      "schema": "Visit",
+      "description": "Track user visits for rating reminders"
+    }
+  }
+}
