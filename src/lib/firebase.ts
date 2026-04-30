@@ -77,11 +77,17 @@ export async function testFirestoreConnection() {
 }
 
 export const signInWithGoogle = async () => {
+  console.log('Starting Google Login with Popup...', { authDomain: firebaseConfig.authDomain });
   try {
     const result = await signInWithPopup(auth, googleProvider);
+    console.log('Login success:', result.user.email);
     return result.user;
-  } catch (error) {
-    console.error('Login error:', error);
+  } catch (error: any) {
+    console.error('Detailed login error:', {
+      code: error.code,
+      message: error.message,
+      stack: error.stack
+    });
     throw error;
   }
 };

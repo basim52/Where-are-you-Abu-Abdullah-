@@ -122,6 +122,7 @@ export default function App() {
   const [isMapsLoaded, setIsMapsLoaded] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [apiKeyError, setApiKeyError] = useState<boolean>(false);
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [userLocation, setUserLocation] = useState<google.maps.LatLngLiteral | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<PlaceDetail | null>(null);
@@ -450,8 +451,15 @@ export default function App() {
   const handleLogin = async () => {
     try {
       await signInWithGoogle();
-    } catch (err) {
-      alert('فشل تسجيل الدخول. حاول مرة أخرى.');
+    } catch (err: any) {
+      console.error('Login error details:', err);
+      if (err.code === 'auth/unauthorized-domain') {
+        alert('خطأ: النطاق الحالي غير مصرح به في Firebase. يرجى إضافة هذا النطاق إلى Authorized Domains.');
+      } else if (err.code === 'auth/popup-blocked') {
+        alert('تم حظر النافذة المنبثقة. يرجى السماح بالمنبثقات لهذا الموقع.');
+      } else {
+        alert(`فشل تسجيل الدخول: ${err.message || 'خطأ غير معروف'}`);
+      }
     }
   };
 
@@ -603,7 +611,7 @@ export default function App() {
 
   useEffect(() => {
     const loader = new Loader({
-      apiKey: GOOGLE_MAPS_API_KEY,
+      apiKey: GOOGLE_MAPS_API_KEY || '',
       version: 'weekly',
       libraries: ['places']
     });
@@ -611,9 +619,11 @@ export default function App() {
     loader.load().then((google) => {
       googleRef.current = google;
       setIsMapsLoaded(true);
+      setApiKeyError(false);
     }).catch(e => {
       console.error('Error loading Google Maps:', e);
-      setError('فشل تحميل خرائط غوغل.');
+      setError('فشل تحميل خرائط غوغل. تأكد من أن مفتاح API صالح ومفعل.');
+      setApiKeyError(true);
     });
   }, []);
 
@@ -631,13 +641,24 @@ export default function App() {
 
   const isPlaceOpen = (place: any) => {
     if (place.business_status && place.business_status !== 'OPERATIONAL') return false;
+    
+    // Check modern isOpen function
     if (typeof place.isOpen === 'function') {
       try { return place.isOpen(); } catch (e) {}
     }
+    
     const oh = place.opening_hours;
-    if (oh && typeof oh.isOpen === 'function') {
-      try { return oh.isOpen(); } catch (e) {}
+    if (oh) {
+      if (typeof oh.isOpen === 'function') {
+        try { return oh.isOpen(); } catch (e) {}
+      }
+      // Fallback to open_now boolean if it exists
+      if (typeof oh.open_now === 'boolean') {
+        return oh.open_now;
+      }
     }
+    
+    // If we have opening_hours but couldn't determine status, return undefined
     return undefined;
   };
 
@@ -645,7 +666,9 @@ export default function App() {
     if (!isMapsLoaded || !googleRef.current) return;
 
     if (!userLocation) {
-      setIsLocationPromptVisible(true);
+      if (!sessionStorage.getItem('locationPromptDismissed')) {
+        setIsLocationPromptVisible(true);
+      }
       setLastUsedQuery(query || null);
       return;
     }
@@ -686,8 +709,7 @@ export default function App() {
 
     const searchParams: any = {
       location: userLocation,
-      radius: radius,
-      openNow: true
+      radius: radius
     };
 
     if (query) {
@@ -855,7 +877,9 @@ export default function App() {
 
   const generateMoodRecommendation = async () => {
     if (!userLocation) {
-      setIsLocationPromptVisible(true);
+      if (!sessionStorage.getItem('locationPromptDismissed')) {
+        setIsLocationPromptVisible(true);
+      }
       return;
     }
     
@@ -873,8 +897,7 @@ export default function App() {
         placesServiceRef.current.textSearch({
           location: userLocation,
           radius: 10000,
-          query: moodQuery || 'restaurant',
-          openNow: true
+          query: moodQuery || 'restaurant'
         }, (res) => resolve(res || []));
       });
 
@@ -940,7 +963,9 @@ export default function App() {
   
   const handleChallengeMe = () => {
     if (!userLocation) {
-      setIsLocationPromptVisible(true);
+      if (!sessionStorage.getItem('locationPromptDismissed')) {
+        setIsLocationPromptVisible(true);
+      }
       return;
     }
     
@@ -1040,6 +1065,17 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {apiKeyError && GOOGLE_MAPS_API_KEY && (
+        <div className="bg-rose-50 border-b border-rose-100 p-4 sticky top-20 z-30">
+          <div className="max-w-7xl mx-auto flex items-center gap-3 text-rose-600">
+            <Info size={18} className="shrink-0" />
+            <div className="text-xs font-bold">
+              {error}
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-4 py-10 sm:py-16 lg:py-20">
         <section className="mb-12 text-center relative">
@@ -1294,7 +1330,10 @@ export default function App() {
                       إيه، فعّل الموقع
                     </button>
                     <button 
-                      onClick={() => setIsLocationPromptVisible(false)}
+                      onClick={() => {
+                        setIsLocationPromptVisible(false);
+                        sessionStorage.setItem('locationPromptDismissed', 'true');
+                      }}
                       className="w-full py-3 text-stone-400 text-xs font-bold"
                     >
                       مو الحين
@@ -1422,9 +1461,9 @@ export default function App() {
                         <h3 className="text-xl font-black text-stone-900 group-hover:text-orange-500 transition-colors mb-1 truncate">{place.name}</h3>
                         <p className="text-[11px] text-stone-400 font-bold truncate mb-4">{place.vicinity}</p>
                         <div className="mt-auto pt-4 border-t border-stone-50 flex items-center justify-between text-[11px] font-black">
-                            <span className={isPlaceOpen(place) ? 'text-emerald-500 flex items-center gap-1' : 'text-rose-400 flex items-center gap-1'}>
-                              <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) ? 'bg-emerald-500 animate-pulse' : 'bg-rose-400'}`} />
-                              {isPlaceOpen(place) ? 'مفتوح الحين' : 'مغلق حالياً'}
+                            <span className={isPlaceOpen(place) === true ? 'text-emerald-500 flex items-center gap-1' : isPlaceOpen(place) === false ? 'text-rose-400 flex items-center gap-1' : 'text-stone-400 flex items-center gap-1'}>
+                              <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : isPlaceOpen(place) === false ? 'bg-rose-400' : 'bg-stone-300'}`} />
+                              {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
                             </span>
                             <div className="bg-stone-50 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 group-hover:text-white transition-all"> <ChevronRight size={16} className="rotate-180" /> </div>
                         </div>
