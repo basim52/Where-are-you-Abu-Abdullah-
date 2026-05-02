@@ -29,6 +29,7 @@ import {
   Trophy,
   Zap,
   Sparkles,
+  Radar,
   ArrowLeft,
   Camera,
   MessageSquare,
@@ -37,6 +38,7 @@ import {
   User as UserIcon,
   RotateCw,
   Trash2,
+  Plus,
   Upload,
   Ghost,
   BrainCircuit,
@@ -69,6 +71,8 @@ import {
   Globe2,
   Share2,
   ChevronLeft,
+  Shield,
+  Briefcase
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
@@ -118,6 +122,13 @@ interface Visit {
   rated: boolean;
 }
 
+interface AppNotification {
+  id: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  timestamp: Date;
+}
+
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
 
 export default function App() {
@@ -128,7 +139,43 @@ export default function App() {
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
   const [userLocation, setUserLocation] = useState<google.maps.LatLngLiteral | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<PlaceDetail | null>(null);
-  const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'map' | 'coverage'>('grid');
+  const [coverageText, setCoverageText] = useState<string>('مرحباً بكم في تغطياتي الخاصة! هنا أشارككم أفضل اللحظات والأماكن التي زرتها شخصياً. أبو عبدالله دائماً في خدمتكم لاختيار الأفضل.');
+  
+  interface CoveragePost {
+    id: string;
+    title: string;
+    description: string;
+    date: string;
+    media: { type: 'image' | 'video', url: string }[];
+  }
+
+  const [coveragePosts, setCoveragePosts] = useState<CoveragePost[]>([
+    {
+      id: '1',
+      title: 'تغطية حصرية: افتتاح مطعم المشويات الفاخر',
+      description: 'اليوم قمت بزيارة مطعم المشويات الجديد في قلب الرياض. الأجواء كانت خيالية والخدمة مذهلة. انصح الجميع بتجربة طبق ريش الغنم، الطعم لا يقاوم!',
+      date: 'منذ يومين',
+      media: [
+        { type: 'image', url: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&q=80' },
+        { type: 'image', url: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80' }
+      ]
+    },
+    {
+      id: '2',
+      title: 'جولة في شوارع العاصمة',
+      description: 'الرياض اليوم غير.. الأجواء غائمة وجميلة جداً. هذي لقطات سريعة لبعض الأماكن اللي مريت عليها اليوم.',
+      date: 'منذ ٣ ساعات',
+      media: [
+        { type: 'video', url: 'https://www.w3schools.com/html/mov_bbb.mp4' }
+      ]
+    }
+  ]);
+
+  const [isEditingCoverage, setIsEditingCoverage] = useState(false);
+  const [showAddMediaModal, setShowAddMediaModal] = useState(false);
+  const [newPostData, setNewPostData] = useState({ title: '', description: '', media: [] as { type: 'image' | 'video', url: string }[] });
+  const [tempCoverageText, setTempCoverageText] = useState('');
   const [filter, setFilter] = useState<'all' | 'restaurant' | 'cafe'>('all');
   const [sortFilter, setSortFilter] = useState<'none' | 'top_rated' | 'top_rest' | 'top_cafe' | 'worst_rest' | 'worst_cafe' | 'trending' | 'nearby' | 'nearby_10'>('none');
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,6 +185,10 @@ export default function App() {
   
   const [openNowOnly, setOpenNowOnly] = useState<boolean>(false);
   const [priceFilter, setPriceFilter] = useState<number | null>(null);
+  const [searchRadius, setSearchRadius] = useState<number>(5000);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifInput, setNotifInput] = useState('');
+  const [showNotifAdmin, setShowNotifAdmin] = useState(false);
   
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -197,6 +248,40 @@ export default function App() {
     
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank');
+  };
+
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [userProfile, setUserProfile] = useState<{ email: string; role: 'admin' | 'user' } | null>(null);
+
+  // Hardcoded Admin for current environment
+  const ADMIN_EMAIL = 'basim5252@gmail.com';
+
+  useEffect(() => {
+    // Simulate auth check - in a real app this would come from Firebase/Auth
+    const checkAuth = () => {
+      // For now, we'll assume the person logged in via AI Studio is our user
+      setUserProfile({ email: ADMIN_EMAIL, role: 'admin' });
+      setIsAdmin(true);
+    };
+    checkAuth();
+  }, []);
+
+  const addNotification = (message: string, type: AppNotification['type'] = 'info') => {
+    if (!isAdmin) {
+      console.warn("Unauthorized: Only admins can send notifications");
+      return;
+    }
+    const newNotif: AppNotification = {
+      id: Math.random().toString(36).substring(7),
+      message,
+      type,
+      timestamp: new Date(),
+    };
+    setNotifications(prev => [newNotif, ...prev]);
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== newNotif.id));
+    }, 5000);
   };
 
   useEffect(() => {
@@ -751,9 +836,11 @@ export default function App() {
     return undefined;
   };
 
-  const findNearby = useCallback((query?: string, radius: number = 5000, isFallback: boolean = false) => {
+  const findNearby = useCallback((query?: string, customRadius?: number, isFallback: boolean = false) => {
     if (!isMapsLoaded || !googleRef.current) return;
 
+    const radius = customRadius || searchRadius;
+    
     if (!userLocation) {
       if (!sessionStorage.getItem('locationPromptDismissed')) {
         setIsLocationPromptVisible(true);
@@ -810,7 +897,7 @@ export default function App() {
         keyword: filter === 'all' ? 'restaurant cafe' : undefined 
       }, handleResults);
     }
-  }, [filter, isMapsLoaded, userLocation]);
+  }, [filter, isMapsLoaded, searchRadius, userLocation]);
 
   const requestLocation = () => {
     setIsLocationPromptVisible(false);
@@ -832,7 +919,7 @@ export default function App() {
     if (isMapsLoaded && !searchQuery) {
         findNearby();
     }
-  }, [filter, findNearby, isMapsLoaded, searchQuery]);
+  }, [filter, findNearby, isMapsLoaded, searchQuery, searchRadius]);
 
   useEffect(() => {
     if (viewMode === 'map' && mapContainerRef.current && userLocation && isMapsLoaded) {
@@ -1483,20 +1570,28 @@ export default function App() {
 
           <div className="flex items-center gap-3 overflow-x-auto no-scrollbar pb-2 px-1 scroll-smooth touch-pan-x">
               <button 
-                onClick={() => { setFilter('all'); setShowFavoritesOnly(false); setSortFilter('none'); setOpenNowOnly(false); setPriceFilter(null); }} 
-                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'all' && sortFilter === 'none' && !showFavoritesOnly && !openNowOnly && priceFilter === null ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
+                onClick={() => setViewMode('coverage')} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${viewMode === 'coverage' ? 'bg-indigo-600 text-white shadow-lg ring-4 ring-indigo-500/10' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-indigo-500/30'}`}
+              >
+                <Briefcase size={14} />
+                تغطيات أبو عبدالله 📸
+              </button>
+
+              <button 
+                onClick={() => { setViewMode('grid'); setFilter('all'); setShowFavoritesOnly(false); setSortFilter('none'); setOpenNowOnly(false); setPriceFilter(null); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${viewMode === 'grid' && filter === 'all' && sortFilter === 'none' && !showFavoritesOnly && !openNowOnly && priceFilter === null ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
               >
                 الكل
               </button>
               <button 
-                onClick={() => { setFilter('restaurant'); setSortFilter('none'); }} 
-                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'restaurant' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
+                onClick={() => { setViewMode('grid'); setFilter('restaurant'); setSortFilter('none'); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${viewMode === 'grid' && filter === 'restaurant' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
               >
                 مطاعم
               </button>
               <button 
-                onClick={() => { setFilter('cafe'); setSortFilter('none'); }} 
-                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${filter === 'cafe' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
+                onClick={() => { setViewMode('grid'); setFilter('cafe'); setSortFilter('none'); }} 
+                className={`flex items-center gap-2 px-6 py-3.5 rounded-full whitespace-nowrap font-bold text-sm transition-all min-h-[48px] ${viewMode === 'grid' && filter === 'cafe' && sortFilter === 'none' ? 'bg-orange-500 text-white shadow-lg' : 'bg-white dark:bg-stone-900 text-stone-400 dark:text-stone-500 border border-stone-100 dark:border-stone-800 hover:border-orange-500/30'}`}
               >
                 مقاهي
               </button>
@@ -1549,6 +1644,29 @@ export default function App() {
               </div>
 
               <div className="h-8 w-px bg-stone-100 dark:bg-stone-800 mx-2 flex-shrink-0" />
+
+              <div className="flex items-center p-1 bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 rounded-full shadow-sm">
+                <div className="pl-3 pr-1 text-stone-300 dark:text-stone-700">
+                  <Radar size={16} />
+                </div>
+                {[
+                  { val: 5000, label: '5كيلو' },
+                  { val: 10000, label: '10كيلو' },
+                  { val: 30000, label: '30كيلو' }
+                ].map((d) => (
+                  <button 
+                    key={d.val}
+                    onClick={() => setSearchRadius(d.val)}
+                    className={`px-4 h-10 rounded-full flex items-center justify-center transition-all gap-1.5 ${searchRadius === d.val ? 'bg-stone-900 dark:bg-orange-500 text-white shadow-lg scale-105 active:scale-95' : 'text-stone-400 dark:text-stone-500 hover:text-stone-600 dark:hover:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800'}`}
+                  >
+                    <span className="text-[10px] font-black whitespace-nowrap">
+                      {d.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="h-8 w-px bg-stone-100 dark:bg-stone-800 mx-2 flex-shrink-0" />
               
               <button 
                 onClick={() => setShowFavoritesOnly(!showFavoritesOnly)} 
@@ -1560,7 +1678,200 @@ export default function App() {
           </div>
         </div>
 
-        {viewMode === 'map' ? (
+        {viewMode === 'coverage' ? (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full min-h-[600px] flex flex-col gap-8"
+            dir="rtl"
+          >
+            {/* Admin Header with Actions */}
+            <div className="flex flex-col md:flex-row items-center justify-between gap-6 bg-white dark:bg-stone-900 p-8 rounded-[3rem] border border-stone-100 dark:border-stone-800 shadow-xl">
+              <div className="flex items-center gap-6">
+                <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/40 rounded-3xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-inner">
+                  <Camera size={32} />
+                </div>
+                <div>
+                  <h2 className="text-4xl font-black text-stone-900 dark:text-white tracking-tight">ركن التغطيات</h2>
+                  <p className="text-stone-400 text-xs font-bold mt-1">تغطيات حصرية وتقارير يومية من أبو عبدالله</p>
+                </div>
+              </div>
+
+              {isAdmin && (
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setShowAddMediaModal(true)}
+                    className="flex items-center gap-2 px-8 py-4 bg-indigo-600 text-white rounded-2xl text-xs font-black hover:bg-indigo-700 transition-all active:scale-95 shadow-xl shadow-indigo-500/20"
+                  >
+                    <Plus size={16} />
+                    إضافة تغطية (منشور جديد)
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setCoveragePosts([]);
+                      addNotification('تم تصفير جميع التغطيات بنجاح', 'warning');
+                    }}
+                    className="flex items-center gap-2 px-6 py-4 bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 rounded-2xl text-xs font-black hover:bg-rose-100 transition-all active:scale-95 border border-rose-100 dark:border-rose-900/30"
+                  >
+                    <Trash2 size={16} />
+                    حذف الكل
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-8">
+              {/* Main Blog Feed */}
+              <div className="flex-1 space-y-8">
+                {coveragePosts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-24 bg-white dark:bg-stone-900 rounded-[3rem] border-2 border-dashed border-stone-100 dark:border-stone-800">
+                    <Ghost size={48} className="text-stone-200 mb-4" />
+                    <p className="text-stone-400 font-bold">لا يوجد تغطيات حالياً يا أبو عبدالله</p>
+                  </div>
+                ) : (
+                  coveragePosts.map((post) => (
+                    <motion.article 
+                      key={post.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      className="group bg-white dark:bg-stone-900 rounded-[3rem] border border-stone-100 dark:border-stone-800 overflow-hidden shadow-sm hover:shadow-2xl transition-all"
+                    >
+                      {/* Media Grid / Gallery */}
+                      <div className={`grid gap-1 bg-stone-100 dark:bg-stone-950 ${post.media.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                        {post.media.map((m, idx) => (
+                          <div key={idx} className={`relative aspect-square md:aspect-video overflow-hidden ${post.media.length === 3 && idx === 0 ? 'col-span-2' : ''}`}>
+                            {m.type === 'image' ? (
+                              <img src={m.url} className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" alt="" />
+                            ) : (
+                              <video 
+                                src={m.url} 
+                                className="w-full h-full object-cover" 
+                                controls 
+                                playsInline 
+                                preload="metadata"
+                                poster="/video-poster.svg" // Optional fallback poster
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Content Area */}
+                      <div className="p-8 md:p-12 relative">
+                        <div className="flex items-center justify-between mb-4">
+                          <span className="text-[10px] font-black text-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-1 rounded-full uppercase tracking-tighter">
+                            {post.date}
+                          </span>
+                          {isAdmin && (
+                            <button 
+                              onClick={() => {
+                                setCoveragePosts(prev => prev.filter(p => p.id !== post.id));
+                                addNotification('تم حذف المنشور بنجاح', 'info');
+                              }}
+                              className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-colors"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
+                        
+                        <h3 className="text-2xl font-black text-stone-900 dark:text-white mb-4 leading-tight">{post.title}</h3>
+                        <p className="text-stone-600 dark:text-stone-400 text-sm leading-relaxed whitespace-pre-wrap font-medium line-clamp-4 group-hover:line-clamp-none transition-all duration-500">
+                          {post.description}
+                        </p>
+                      </div>
+                    </motion.article>
+                  ))
+                )}
+              </div>
+
+              {/* Sidebar Info */}
+              <div className="w-full md:w-96 space-y-8">
+                <div className="bg-orange-50/50 dark:bg-orange-950/20 p-8 rounded-[3rem] border border-orange-100 dark:border-orange-900/30 relative">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-white dark:bg-stone-800 rounded-xl flex items-center justify-center text-orange-500 shadow-sm border border-orange-100 dark:border-stone-700">
+                      <MessageSquare size={20} />
+                    </div>
+                    <h3 className="text-sm font-black text-orange-600 dark:text-orange-400 uppercase tracking-widest">حديث أبو عبدالله</h3>
+                  </div>
+                  
+                  {isEditingCoverage ? (
+                    <div className="space-y-4">
+                      <textarea
+                        value={tempCoverageText}
+                        onChange={(e) => setTempCoverageText(e.target.value)}
+                        className="w-full h-48 bg-white dark:bg-stone-800 rounded-2xl p-4 text-xs font-medium border-2 border-orange-200 dark:border-stone-700 outline-none focus:ring-4 focus:ring-orange-500/10 transition-all text-stone-900 dark:text-stone-100"
+                        placeholder="اكتب حديثك يا أبو عبدالله..."
+                      />
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            setCoverageText(tempCoverageText);
+                            setIsEditingCoverage(false);
+                            addNotification('تم تحديث حديث أبو عبدالله بنجاح', 'success');
+                          }}
+                          className="flex-1 py-3 bg-orange-500 text-white rounded-xl text-[10px] font-black shadow-lg hover:shadow-orange-500/20 active:scale-95 transition-all"
+                        >
+                          حفظ التعديلات
+                        </button>
+                        <button 
+                          onClick={() => setIsEditingCoverage(false)}
+                          className="px-4 py-3 bg-stone-100 dark:bg-stone-800 text-stone-400 rounded-xl text-[10px] font-bold"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <p className="text-stone-700 dark:text-stone-300 text-sm leading-relaxed font-medium mb-6">
+                        {coverageText}
+                      </p>
+                      {isAdmin && (
+                        <button 
+                          onClick={() => {
+                            setTempCoverageText(coverageText);
+                            setIsEditingCoverage(true);
+                          }}
+                          className="w-full py-3 bg-white dark:bg-stone-800 border border-orange-200 dark:border-stone-700 text-orange-500 rounded-xl text-[10px] font-black hover:bg-orange-50 dark:hover:bg-orange-900/30 transition-colors flex items-center justify-center gap-2"
+                        >
+                          <Zap size={12} />
+                          تحرير الحديث
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="absolute -top-3 -left-3 bg-white dark:bg-stone-900 p-2 rounded-xl shadow-lg transform rotate-12 border border-stone-100 dark:border-stone-800">
+                    <Sparkles size={16} className="text-orange-500" />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-stone-900 p-8 rounded-[3rem] border border-stone-100 dark:border-stone-800">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-900/40 rounded-xl flex items-center justify-center text-indigo-600 shadow-sm">
+                      <Trophy size={20} />
+                    </div>
+                    <h3 className="text-sm font-black text-stone-900 dark:text-stone-100 uppercase tracking-widest">إحصائيات المدونة</h3>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl">
+                      <span className="text-[10px] font-bold text-stone-400">إجمالي التقارير</span>
+                      <span className="text-xl font-black text-stone-900 dark:text-white">{coveragePosts.length}</span>
+                    </div>
+                    <div className="flex justify-between items-center p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl">
+                      <span className="text-[10px] font-bold text-stone-400">ملفات مرفوعة</span>
+                      <span className="text-xl font-black text-stone-900 dark:text-white">
+                        {coveragePosts.reduce((acc, curr) => acc + curr.media.length, 0)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        ) : viewMode === 'map' ? (
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }} 
             animate={{ opacity: 1, scale: 1 }} 
@@ -2017,6 +2328,230 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Custom Notification Admin Control (Admin Only) */}
+      {isAdmin && (
+        <div className="fixed bottom-24 right-6 flex flex-col items-end gap-3 z-[150]" dir="rtl">
+          <AnimatePresence>
+            {showNotifAdmin && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20, scale: 0.9 }}
+                className="bg-white dark:bg-stone-900 p-4 rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.2)] border border-stone-100 dark:border-stone-800 w-72 mb-2"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-[10px] font-black text-stone-900 dark:text-stone-100 uppercase tracking-widest flex items-center gap-2">
+                    <Shield size={10} className="text-orange-500" />
+                    وحة التحكم (أدمن)
+                  </h4>
+                  <span className="text-[8px] bg-orange-100 dark:bg-orange-900/40 text-orange-600 px-2 py-0.5 rounded-full font-black">أبو عبدالله</span>
+                </div>
+                <textarea 
+                  value={notifInput}
+                  onChange={(e) => setNotifInput(e.target.value)}
+                  placeholder="اكتب رسالتك لـ أبو عبدالله..."
+                  className="w-full h-24 bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-xs resize-none mb-3 focus:ring-2 focus:ring-orange-500 transition-all outline-none dark:text-stone-200"
+                />
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      if (notifInput.trim()) {
+                        addNotification(notifInput, 'info');
+                        setNotifInput('');
+                        setShowNotifAdmin(false);
+                      }
+                    }}
+                    className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-xl text-[10px] font-black transition-all active:scale-95"
+                  >
+                    إرسال إشعار عام
+                  </button>
+                  <button 
+                    onClick={() => setShowNotifAdmin(false)}
+                    className="px-4 bg-stone-100 dark:bg-stone-800 text-stone-500 rounded-xl text-[10px]"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          
+          <button 
+            onClick={(e) => { e.stopPropagation(); setShowNotifAdmin(!showNotifAdmin); }}
+            className="w-16 h-16 bg-white dark:bg-stone-900 border-4 border-white dark:border-stone-900 rounded-full flex items-center justify-center shadow-2xl hover:scale-110 active:scale-95 transition-all text-orange-500 relative"
+          >
+            <Bell size={24} className={showNotifAdmin ? 'animate-bounce' : ''} />
+            {!showNotifAdmin && <div className="absolute top-1 right-1 w-3 h-3 bg-rose-500 rounded-full border-2 border-white dark:border-stone-900" />}
+          </button>
+        </div>
+      )}
+
+      {/* Notifications Toast Stack */}
+      <div className="fixed top-8 inset-x-0 flex flex-col items-center gap-3 z-[10000] pointer-events-none px-6" dir="rtl">
+        <AnimatePresence>
+          {notifications.map((notif) => (
+            <motion.div 
+              key={notif.id}
+              initial={{ opacity: 0, y: -50, scale: 0.8 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.5, y: -20, transition: { duration: 0.2 } }}
+              className="pointer-events-auto bg-white/9 worst-blur dark:bg-stone-900/90 backdrop-blur-2xl border border-white dark:border-stone-800/50 py-4 px-6 rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.2)] flex items-center gap-4 max-w-md w-full relative group overflow-hidden"
+            >
+              <div className="absolute right-0 top-0 bottom-0 w-1.5 bg-orange-500" />
+              <div className="w-10 h-10 rounded-2xl bg-orange-50 dark:bg-orange-950/30 flex items-center justify-center flex-shrink-0 animate-pulse">
+                <Sparkles size={18} className="text-orange-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-black text-stone-900 dark:text-stone-100 leading-relaxed">
+                  {notif.message}
+                </p>
+              </div>
+              <button 
+                onClick={() => setNotifications(prev => prev.filter(n => n.id !== notif.id))}
+                className="text-stone-300 hover:text-stone-900 dark:hover:text-white transition-colors p-1"
+              >
+                <X size={16} />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
+        {viewMode === 'coverage' && (
+          <div className="fixed bottom-24 right-24 z-[150]" dir="rtl">
+            <button 
+              onClick={() => addNotification('أبو عبدالله يرحب بكم في قسم التغطيات الحصرية!', 'info')}
+              className="w-16 h-16 bg-indigo-600 border-4 border-white dark:border-stone-900 rounded-full flex items-center justify-center shadow-2xl hover:scale-110 active:scale-95 transition-all text-white"
+            >
+              <Camera size={26} />
+            </button>
+          </div>
+        )}
+
+      {/* Add Coverage Post Modal */}
+      <AnimatePresence>
+        {showAddMediaModal && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4" dir="rtl">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }} 
+              onClick={() => setShowAddMediaModal(false)} 
+              className="absolute inset-0 bg-black/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 30 }} 
+              animate={{ scale: 1, opacity: 1, y: 0 }} 
+              exit={{ scale: 0.9, opacity: 0, y: 30 }}
+              className="relative w-full max-w-2xl bg-white dark:bg-stone-900 rounded-[3rem] p-10 shadow-2xl border border-stone-200 dark:border-stone-800 overflow-y-auto max-h-[90vh] no-scrollbar"
+            >
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-14 h-14 bg-indigo-600 rounded-3xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
+                  <Plus size={28} />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-black text-stone-900 dark:text-white">إطلاق تغطية جديدة</h3>
+                  <p className="text-xs text-stone-400 font-bold">شاركنا جولتك الحصرية الحين يا أبو عبدالله</p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-xs font-black text-stone-900 dark:text-stone-100 mb-3 mr-2">عنوان التغطية</label>
+                  <input 
+                    type="text"
+                    value={newPostData.title}
+                    onChange={(e) => setNewPostData(prev => ({ ...prev, title: e.target.value }))}
+                    placeholder="مثال: تجربتي في افتتاح مطعم السفير..."
+                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-5 text-sm font-medium outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-stone-900 dark:text-stone-100 mb-3 mr-2">تقرير الزيارة (المدونة)</label>
+                  <textarea 
+                    value={newPostData.description}
+                    onChange={(e) => setNewPostData(prev => ({ ...prev, description: e.target.value }))}
+                    placeholder="اكتب تفاصيل الزيارة ورأيك الشخصي بكل أمانة..."
+                    className="w-full h-32 bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-5 text-sm font-medium outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all dark:text-white resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-stone-900 dark:text-stone-100 mb-3 mr-2">رفع الوسائط (صور وفيديوهات متعددة)</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+                    {newPostData.media.map((m, idx) => (
+                      <div key={idx} className="relative aspect-square rounded-2xl overflow-hidden border border-stone-100 dark:border-stone-800">
+                        {m.type === 'image' ? (
+                          <img src={m.url} className="w-full h-full object-cover" alt="" />
+                        ) : (
+                          <video src={m.url} className="w-full h-full object-cover" muted autoPlay playsInline loop />
+                        )}
+                        <button 
+                          onClick={() => setNewPostData(prev => ({ ...prev, media: prev.media.filter((_, i) => i !== idx) }))}
+                          className="absolute top-2 left-2 bg-rose-500 text-white p-1.5 rounded-lg shadow-lg"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    ))}
+                    <label className="aspect-square flex flex-col items-center justify-center border-2 border-dashed border-stone-200 dark:border-stone-800 rounded-2xl hover:bg-stone-50 dark:hover:bg-stone-800/50 transition-all cursor-pointer group">
+                      <input 
+                        type="file" 
+                        multiple 
+                        accept="image/*,video/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files || []);
+                          const newMedia = files.map((file: File) => ({
+                            type: file.type.startsWith('video') ? 'video' : 'image' as 'image' | 'video',
+                            url: URL.createObjectURL(file)
+                          }));
+                          setNewPostData(prev => ({ ...prev, media: [...prev.media, ...newMedia] }));
+                        }}
+                      />
+                      <Upload size={24} className="text-stone-300 mb-2 group-hover:scale-110 transition-transform" />
+                      <span className="text-[10px] font-black text-stone-400">إضافة ملفات</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button 
+                    onClick={() => {
+                      if (!newPostData.title || !newPostData.description || newPostData.media.length === 0) {
+                        addNotification('يا غالي لازم تعبي البيانات وترفع صورة أو فيديو على الأقل!', 'warning');
+                        return;
+                      }
+                      const post: CoveragePost = {
+                        id: Math.random().toString(36).substring(7),
+                        title: newPostData.title,
+                        description: newPostData.description,
+                        media: newPostData.media,
+                        date: 'الآن'
+                      };
+                      setCoveragePosts(prev => [post, ...prev]);
+                      setShowAddMediaModal(false);
+                      setNewPostData({ title: '', description: '', media: [] });
+                      addNotification('الله يبارك فيك! تم نشر التغطية بنجاح يا أبو عبدالله 📸', 'success');
+                    }}
+                    className="flex-1 py-5 bg-indigo-600 text-white rounded-2xl text-sm font-black shadow-2xl hover:shadow-indigo-500/30 active:scale-95 transition-all"
+                  >
+                    نشر التدوينة الحين
+                  </button>
+                  <button 
+                    onClick={() => setShowAddMediaModal(false)}
+                    className="px-8 py-5 bg-stone-100 dark:bg-stone-800 text-stone-500 rounded-2xl text-sm font-bold"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <style>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }
