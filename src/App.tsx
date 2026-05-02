@@ -81,6 +81,7 @@ import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { 
   collection, 
   addDoc, 
+  setDoc,
   deleteDoc,
   doc,
   query, 
@@ -96,6 +97,7 @@ import {
 
 // Types for Google Maps Places
 interface PlaceDetail extends google.maps.places.PlaceResult {
+  id?: string;
   distance?: number;
   internalRating?: number;
   internalReviewCount?: number;
@@ -129,6 +131,33 @@ interface AppNotification {
   timestamp: Date;
 }
 
+const INITIAL_PLACES: PlaceDetail[] = [
+  {
+    id: 'abu_abdullah_exclusive_1',
+    place_id: 'abu_abdullah_exclusive_1',
+    name: 'مشويات أبو عبدالله الخاصة',
+    vicinity: 'سيهات - شارع الخليج',
+    rating: 5,
+    user_ratings_total: 1540,
+    types: ['restaurant'],
+    geometry: {
+      location: { lat: 26.4716, lng: 50.0436 } as any
+    }
+  },
+  {
+    id: 'abu_abdullah_exclusive_2',
+    place_id: 'abu_abdullah_exclusive_2',
+    name: 'قهوة زمان الفاخرة',
+    vicinity: 'الدمام - الشاطئ',
+    rating: 4.8,
+    user_ratings_total: 890,
+    types: ['cafe'],
+    geometry: {
+      location: { lat: 26.4529, lng: 50.1251 } as any
+    }
+  }
+];
+
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
 
 export default function App() {
@@ -137,6 +166,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [apiKeyError, setApiKeyError] = useState<boolean>(false);
   const [places, setPlaces] = useState<PlaceDetail[]>([]);
+  const [placesLoading, setPlacesLoading] = useState(true);
   const [userLocation, setUserLocation] = useState<google.maps.LatLngLiteral | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<PlaceDetail | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'map' | 'coverage'>('grid');
@@ -148,32 +178,60 @@ export default function App() {
     description: string;
     date: string;
     media: { type: 'image' | 'video', url: string }[];
+    mediaCount?: number;
+    authorId?: string;
+    authorName?: string;
   }
 
-  const [coveragePosts, setCoveragePosts] = useState<CoveragePost[]>([
-    {
-      id: '1',
-      title: 'تغطية حصرية: افتتاح مطعم المشويات الفاخر',
-      description: 'اليوم قمت بزيارة مطعم المشويات الجديد في قلب الرياض. الأجواء كانت خيالية والخدمة مذهلة. انصح الجميع بتجربة طبق ريش الغنم، الطعم لا يقاوم!',
-      date: 'منذ يومين',
-      media: [
-        { type: 'image', url: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&q=80' },
-        { type: 'image', url: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80' }
-      ]
-    },
-    {
-      id: '2',
-      title: 'جولة في شوارع العاصمة',
-      description: 'الرياض اليوم غير.. الأجواء غائمة وجميلة جداً. هذي لقطات سريعة لبعض الأماكن اللي مريت عليها اليوم.',
-      date: 'منذ ٣ ساعات',
-      media: [
-        { type: 'video', url: 'https://www.w3schools.com/html/mov_bbb.mp4' }
-      ]
+  const [coveragePosts, setCoveragePosts] = useState<CoveragePost[]>([]);
+  const [coveragePostsLoading, setCoveragePostsLoading] = useState(true);
+
+  // Helper to chunk large base64 strings for Firestore
+  const CHUNK_SIZE = 800 * 1024; // 800KB
+  const uploadChunkedMedia = async (postId: string, mediaItem: { type: 'image' | 'video', url: string }, order: number) => {
+    const mediaRef = collection(db, 'coveragePosts', postId, 'media');
+    const isChunked = mediaItem.url.length > CHUNK_SIZE;
+    
+    if (!isChunked) {
+      await addDoc(mediaRef, {
+        type: mediaItem.type,
+        order,
+        data: mediaItem.url,
+        isChunked: false,
+        createdAt: serverTimestamp()
+      });
+    } else {
+      const mediaDoc = await addDoc(mediaRef, {
+        type: mediaItem.type,
+        order,
+        isChunked: true,
+        totalChunks: Math.ceil(mediaItem.url.length / CHUNK_SIZE),
+        createdAt: serverTimestamp()
+      });
+
+      for (let i = 0; i < mediaItem.url.length; i += CHUNK_SIZE) {
+        const chunkData = mediaItem.url.substring(i, i + CHUNK_SIZE);
+        const chunkIndex = Math.floor(i / CHUNK_SIZE);
+        await setDoc(doc(db, 'coveragePosts', postId, 'media', mediaDoc.id, 'chunks', `chunk_${chunkIndex}`), {
+          data: chunkData,
+          index: chunkIndex
+        });
+      }
     }
-  ]);
+  };
+
+  const fetchFullMedia = async (postId: string, mediaDoc: any) => {
+    if (!mediaDoc.isChunked) return mediaDoc.data;
+    const chunksRef = collection(db, 'coveragePosts', postId, 'media', mediaDoc.id, 'chunks');
+    const chunksSnap = await getDocs(query(chunksRef, orderBy('index', 'asc')));
+    const fullBase64 = chunksSnap.docs.map(d => d.data().data).join('');
+    return fullBase64;
+  };
 
   const [isEditingCoverage, setIsEditingCoverage] = useState(false);
   const [showAddMediaModal, setShowAddMediaModal] = useState(false);
+  const [showAddPlaceModal, setShowAddPlaceModal] = useState(false);
+  const [newPlaceData, setNewPlaceData] = useState({ name: '', vicinity: '', type: 'restaurant' as 'restaurant' | 'cafe', rating: 5 });
   const [newPostData, setNewPostData] = useState({ title: '', description: '', media: [] as { type: 'image' | 'video', url: string }[] });
   const [tempCoverageText, setTempCoverageText] = useState('');
   const [filter, setFilter] = useState<'all' | 'restaurant' | 'cafe'>('all');
@@ -182,6 +240,73 @@ export default function App() {
   const [displayPlaces, setDisplayPlaces] = useState<PlaceDetail[]>([]);
   const [internalRatingsMap, setInternalRatingsMap] = useState<Record<string, { rating: number, count: number }>>({});
   const [user, setUser] = useState<User | null>(null);
+
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [userProfile, setUserProfile] = useState<{ email: string; role: 'admin' | 'user' } | null>(null);
+
+  // Hardcoded Admin for current environment
+  const ADMIN_EMAIL = 'basim5252@gmail.com';
+
+  useEffect(() => {
+    // Check if current user is admin
+    const isAdminEmail = user?.email === ADMIN_EMAIL;
+    setIsAdmin(isAdminEmail);
+  }, [user]);
+
+  // Sync Places from Firestore
+  const firestorePlacesRef = useRef<PlaceDetail[]>([]);
+  useEffect(() => {
+    // If we have no places at all, start with INITIAL_PLACES
+    if (places.length === 0) {
+      setPlaces(INITIAL_PLACES);
+    }
+    
+    const unsubscribe = onSnapshot(collection(db, 'places'), (snapshot) => {
+      if (!snapshot.empty) {
+        const firestorePlaces = snapshot.docs.map(doc => ({
+          ...doc.data(),
+          id: doc.id,
+          place_id: doc.id
+        })) as PlaceDetail[];
+        firestorePlacesRef.current = firestorePlaces;
+        setPlaces(prev => {
+          const merged = [...firestorePlaces];
+          prev.forEach(p => {
+            const pid = p.place_id || p.id;
+            if (pid && !merged.find(m => (m.place_id || m.id) === pid)) {
+              merged.push(p);
+            }
+          });
+          return merged;
+        });
+      } else {
+        // If snapshot is empty, we still have our INITIAL_PLACES in state
+        // We can try to bootstrap here if we are admin
+        if (isAdmin) {
+          INITIAL_PLACES.forEach(async (p) => {
+            try { await setDoc(doc(db, 'places', p.id || p.place_id), p); } catch (e) {}
+          });
+        }
+      }
+      setPlacesLoading(false);
+    }, (error) => {
+      console.warn("Places Fetch failed:", error.message);
+      setPlacesLoading(false);
+    });
+    return () => unsubscribe();
+  }, [isAdmin]);
+
+  // Sync Ratings from Firestore
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'ratings'), (snapshot) => {
+      const ratings: Record<string, { rating: number, count: number }> = {};
+      snapshot.docs.forEach(doc => {
+        ratings[doc.id] = doc.data() as { rating: number, count: number };
+      });
+      setInternalRatingsMap(ratings);
+    });
+    return () => unsubscribe();
+  }, []);
   
   const [openNowOnly, setOpenNowOnly] = useState<boolean>(false);
   const [priceFilter, setPriceFilter] = useState<number | null>(null);
@@ -249,22 +374,6 @@ export default function App() {
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank');
   };
-
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [userProfile, setUserProfile] = useState<{ email: string; role: 'admin' | 'user' } | null>(null);
-
-  // Hardcoded Admin for current environment
-  const ADMIN_EMAIL = 'basim5252@gmail.com';
-
-  useEffect(() => {
-    // Simulate auth check - in a real app this would come from Firebase/Auth
-    const checkAuth = () => {
-      // For now, we'll assume the person logged in via AI Studio is our user
-      setUserProfile({ email: ADMIN_EMAIL, role: 'admin' });
-      setIsAdmin(true);
-    };
-    checkAuth();
-  }, []);
 
   const addNotification = (message: string, type: AppNotification['type'] = 'info') => {
     if (!isAdmin) {
@@ -382,6 +491,60 @@ export default function App() {
     testFirestoreConnection();
     const unsubscribe = onAuthStateChanged(auth, (currUser) => {
       setUser(currUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Listen for coverage posts
+  useEffect(() => {
+    const q = query(
+      collection(db, 'coveragePosts'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const postsWithMediaPromises = snapshot.docs.map(async (docSnap) => {
+        const data = docSnap.data();
+        const createdAt = data.createdAt as Timestamp;
+        const dateStr = createdAt ? new Date(createdAt.toMillis()).toLocaleDateString('ar-SA', { day: 'numeric', month: 'long' }) : 'الآن';
+        
+        // Fetch sub-collection media
+        const mediaRef = collection(db, 'coveragePosts', docSnap.id, 'media');
+        const mediaSnap = await getDocs(query(mediaRef, orderBy('order', 'asc')));
+        
+        const mediaItems = await Promise.all(mediaSnap.docs.map(async (mDoc) => {
+          const mData = mDoc.data();
+          const fullData = await fetchFullMedia(docSnap.id, { ...mData, id: mDoc.id });
+          return { type: mData.type, url: fullData };
+        }));
+
+        return {
+          id: docSnap.id,
+          ...data,
+          media: mediaItems,
+          date: dateStr
+        } as CoveragePost;
+      });
+
+      const results = await Promise.all(postsWithMediaPromises);
+      setCoveragePosts(results);
+      setCoveragePostsLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'coveragePosts');
+      setCoveragePostsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Listen for app settings
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'coverage'), (snapshot) => {
+      if (snapshot.exists()) {
+        setCoverageText(snapshot.data().coverageIntro);
+      }
+    }, (error) => {
+      console.warn("Settings fetch failed (likely no doc yet):", error.message);
     });
     return () => unsubscribe();
   }, []);
@@ -866,14 +1029,24 @@ export default function App() {
             calculateDistance(userLocation.lat, userLocation.lng, place.geometry.location.lat(), place.geometry.location.lng()) : undefined
         })).sort((a, b) => (a.distance || 0) - (b.distance || 0));
 
-        setPlaces(sortedResults as PlaceDetail[]);
+        // Merge with existing Firestore places
+        setPlaces(prev => {
+          const merged = [...(sortedResults as PlaceDetail[])];
+          prev.forEach(p => {
+            const pid = p.place_id || p.id;
+            if (pid && !merged.find(m => (m.place_id || m.id) === pid)) {
+              merged.push(p);
+            }
+          });
+          return merged;
+        });
         setLoading(false);
       } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS || !results || results.length === 0) {
         if (!isFallback && radius < 20000) {
           // Automatic expansion (Fallback)
           findNearby(query, radius + 5000, true);
         } else {
-          setPlaces([]);
+          // DO NOT clear places here, keep Firestore places
           setError(isFallback ? 'دورت حولك حتى 15 كيلو وما لقيت خيارات تبيض الوجه، جرب تبحث عن شي ثاني؟' : 'لم يتم العثور على نتائج.');
           setLoading(false);
         }
@@ -1077,6 +1250,7 @@ export default function App() {
         }, (res) => resolve(res || []));
       });
 
+      // Merge results with firestore places
       const topResults = results.slice(0, 8).map(p => ({
         name: p.name,
         rating: p.rating,
@@ -1087,11 +1261,24 @@ export default function App() {
           calculateDistance(userLocation.lat, userLocation.lng, p.geometry.location.lat(), p.geometry.location.lng()).toFixed(1) : '?'
       }));
 
+      // Add firestore places to top recommendations if they match mood
+      const relevantFirestore = firestorePlacesRef.current.slice(0, 5).map(p => ({
+        name: p.name,
+        rating: p.rating,
+        reviews: p.user_ratings_total,
+        vicinity: p.vicinity,
+        id: p.place_id,
+        distance: p.geometry?.location ? 
+          calculateDistance(userLocation.lat, userLocation.lng, (p.geometry.location as any).lat(), (p.geometry.location as any).lng()).toFixed(1) : '?'
+      }));
+
+      const finalContext = [...topResults, ...relevantFirestore];
+
       const userName = user?.displayName?.split(' ')?.[0] || 'أبو عبدالله';
       const prompt = `أنت مساعد خبير ومستشار برتبة "خوي" في المطاعم والمقاهي في المنطقة الشرقية (الدمام، سيهات، الخبر) والبحرين. 
       اسم المستخدم: ${userName}. 
       مزاج المستخدم الحالي: ${JSON.stringify(moodPrefs)}. 
-      الأماكن الحقيقية المتاحة حالياً حول المستخدم (Open Now): ${JSON.stringify(topResults)}.
+      الأماكن الحقيقية المتاحة حالياً حول المستخدم (Open Now): ${JSON.stringify(finalContext)}.
       
       المطلوب منك:
       1. اختيار "المكان الفائز" من القائمة بناءً على توافق المزاج (مثلاً إذا اختار رومانسي تجنب الأماكن المزدحمة).
@@ -1129,7 +1316,14 @@ export default function App() {
           distance: p.geometry?.location ? 
             calculateDistance(userLocation.lat, userLocation.lng, p.geometry.location.lat(), p.geometry.location.lng()) : undefined
         })).sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        setPlaces(sorted as PlaceDetail[]);
+        
+        setPlaces(prev => {
+          const merged = [...firestorePlacesRef.current];
+          sorted.forEach(s => {
+            if (!merged.find(m => m.place_id === s.place_id)) merged.push(s as PlaceDetail);
+          });
+          return merged;
+        });
       }
     } catch (err: any) {
       setError(err.message || 'فشل الحصول على نصيحة ذكية حالياً.');
@@ -1200,6 +1394,13 @@ export default function App() {
             >
               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
+            <button 
+              onClick={requestLocation}
+              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all border ${userLocation ? 'bg-orange-500 text-white border-orange-400 shadow-lg shadow-orange-500/20' : 'bg-stone-50 dark:bg-stone-800 text-stone-500 dark:text-stone-400 border-stone-100 dark:border-stone-700'}`}
+              title="تفعيل الموقع"
+            >
+              <Navigation size={18} className={!userLocation ? 'animate-pulse' : ''} />
+            </button>
           </div>
           
           <form onSubmit={handleSearch} className="w-full sm:flex-1 sm:max-w-md relative group order-3 sm:order-2">
@@ -1226,12 +1427,19 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <button 
-                onClick={handleLogin} 
-                className="w-11 h-11 flex items-center justify-center bg-stone-900 text-white rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
-              >
-                <UserIcon size={20} />
-              </button>
+              <div className="relative group/login">
+                <button 
+                  onClick={handleLogin} 
+                  className="w-11 h-11 flex items-center justify-center bg-stone-900 text-white rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
+                >
+                  <UserIcon size={20} />
+                </button>
+                <div className="absolute top-full left-0 mt-3 p-3 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl opacity-0 group-hover/login:opacity-100 transition-opacity pointer-events-none w-64 z-50 text-right">
+                  <p className="text-[10px] text-stone-600 dark:text-stone-400 font-bold leading-relaxed">
+                    إذا واجهت مشكلة في الدخول على Vercel، تأكد من إضافة النطاق إلى القائمة المسموحة (Authorized Domains) في إعدادات Firebase Authentication.
+                  </p>
+                </div>
+              </div>
             )}
             <button 
               onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')} 
@@ -1723,7 +1931,12 @@ export default function App() {
             <div className="flex flex-col md:flex-row gap-8">
               {/* Main Blog Feed */}
               <div className="flex-1 space-y-8">
-                {coveragePosts.length === 0 ? (
+                {coveragePostsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-24 bg-white dark:bg-stone-900 rounded-[3rem] border border-stone-100 dark:border-stone-800">
+                    <RotateCw size={32} className="text-indigo-500 animate-spin mb-4" />
+                    <p className="text-stone-400 font-bold">جاري تحميل التغطيات الحصرية...</p>
+                  </div>
+                ) : coveragePosts.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-24 bg-white dark:bg-stone-900 rounded-[3rem] border-2 border-dashed border-stone-100 dark:border-stone-800">
                     <Ghost size={48} className="text-stone-200 mb-4" />
                     <p className="text-stone-400 font-bold">لا يوجد تغطيات حالياً يا أبو عبدالله</p>
@@ -1750,7 +1963,7 @@ export default function App() {
                                 controls 
                                 playsInline 
                                 preload="metadata"
-                                poster="/video-poster.svg" // Optional fallback poster
+                                poster="/video-poster.svg"
                               />
                             )}
                           </div>
@@ -1765,9 +1978,13 @@ export default function App() {
                           </span>
                           {isAdmin && (
                             <button 
-                              onClick={() => {
-                                setCoveragePosts(prev => prev.filter(p => p.id !== post.id));
-                                addNotification('تم حذف المنشور بنجاح', 'info');
+                              onClick={async () => {
+                                try {
+                                  await deleteDoc(doc(db, 'coveragePosts', post.id));
+                                  addNotification('تم حذف المنشور بنجاح', 'info');
+                                } catch (err) {
+                                  handleFirestoreError(err, OperationType.DELETE, `coveragePosts/${post.id}`);
+                                }
                               }}
                               className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-colors"
                             >
@@ -1806,10 +2023,14 @@ export default function App() {
                       />
                       <div className="flex gap-2">
                         <button 
-                          onClick={() => {
-                            setCoverageText(tempCoverageText);
-                            setIsEditingCoverage(false);
-                            addNotification('تم تحديث حديث أبو عبدالله بنجاح', 'success');
+                          onClick={async () => {
+                            try {
+                              await setDoc(doc(db, 'settings', 'coverage'), { coverageIntro: tempCoverageText }, { merge: true });
+                              setIsEditingCoverage(false);
+                              addNotification('تم تحديث حديث أبو عبدالله بنجاح', 'success');
+                            } catch (err) {
+                              handleFirestoreError(err, OperationType.WRITE, 'settings/coverage');
+                            }
                           }}
                           className="flex-1 py-3 bg-orange-500 text-white rounded-xl text-[10px] font-black shadow-lg hover:shadow-orange-500/20 active:scale-95 transition-all"
                         >
@@ -1890,8 +2111,20 @@ export default function App() {
           </motion.div>
         ) : (
           <section className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-8">
-              {loading ? (
-                  Array.from({ length: 6 }).map((_, i) => <div key={i} className="aspect-[16/10] bg-stone-100 rounded-[2rem] animate-pulse" />)
+              {isAdmin && (
+                <button 
+                  onClick={() => setShowAddPlaceModal(true)}
+                  className="group relative flex flex-col items-center justify-center bg-white dark:bg-stone-900 rounded-[2.2rem] p-6 border-2 border-dashed border-indigo-100 dark:border-indigo-900/30 hover:border-indigo-400 hover:bg-indigo-50/50 transition-all aspect-[16/11]"
+                >
+                  <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/50 rounded-3xl flex items-center justify-center text-indigo-600 mb-4 group-hover:scale-110 transition-transform">
+                    <Plus size={32} />
+                  </div>
+                  <span className="text-sm font-black text-indigo-600">إضافة مكان جديد بالسحابة</span>
+                </button>
+              )}
+              
+              {loading || placesLoading ? (
+                  Array.from({ length: 6 }).map((_, i) => <div key={i} className="aspect-[16/11] bg-stone-100 dark:bg-stone-800 rounded-[2.2rem] animate-pulse" />)
               ) : displayPlaces.length > 0 ? (
                   displayPlaces.map((place) => (
                       <motion.div 
@@ -2199,10 +2432,21 @@ export default function App() {
             window.scrollTo({ top: 0, behavior: 'smooth' }); 
             setShowMoodSection(false); 
           }}
-          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${(!showMoodSection && viewMode !== 'map' && !showFavoritesOnly) || (!showMoodSection && viewMode !== 'map' && showFavoritesOnly === undefined) ? 'bg-orange-500 text-white shadow-lg' : 'text-stone-400'}`}
+          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${viewMode === 'grid' && !showMoodSection && !showFavoritesOnly ? 'bg-orange-500 text-white shadow-lg' : 'text-stone-400'}`}
         >
           <Home size={20} />
           <span className="text-[9px] font-black uppercase tracking-tighter">الرئيسية</span>
+        </button>
+
+        <button 
+          onClick={() => { 
+            setViewMode('coverage');
+            setShowMoodSection(false);
+          }}
+          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${viewMode === 'coverage' ? 'bg-indigo-600 text-white shadow-lg' : 'text-stone-400'}`}
+        >
+          <Camera size={20} />
+          <span className="text-[9px] font-black uppercase tracking-tighter">تغطياتي</span>
         </button>
         
         <button 
@@ -2480,6 +2724,7 @@ export default function App() {
 
                 <div>
                   <label className="block text-xs font-black text-stone-900 dark:text-stone-100 mb-3 mr-2">رفع الوسائط (صور وفيديوهات متعددة)</label>
+                  <p className="text-[9px] text-amber-600 dark:text-amber-400 font-bold mb-3 mr-2">* تنبيه: تم رفع الحد الأقصى للفيديوهات ليكون مفتوحاً (حتى ٢٠ ميجابايت) لضمان أفضل جودة لمتابعيك يا أبو عبدالله.</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
                     {newPostData.media.map((m, idx) => (
                       <div key={idx} className="relative aspect-square rounded-2xl overflow-hidden border border-stone-100 dark:border-stone-800">
@@ -2502,13 +2747,37 @@ export default function App() {
                         multiple 
                         accept="image/*,video/*"
                         className="hidden"
-                        onChange={(e) => {
-                          const files = Array.from(e.target.files || []);
-                          const newMedia = files.map((file: File) => ({
-                            type: file.type.startsWith('video') ? 'video' : 'image' as 'image' | 'video',
-                            url: URL.createObjectURL(file)
-                          }));
-                          setNewPostData(prev => ({ ...prev, media: [...prev.media, ...newMedia] }));
+                        onChange={async (e) => {
+                          const files = Array.from(e.target.files || []) as File[];
+                          const convertToBase64 = (file: File): Promise<string> => {
+                            return new Promise((resolve, reject) => {
+                              const reader = new FileReader();
+                              reader.readAsDataURL(file);
+                              reader.onload = () => resolve(reader.result as string);
+                              reader.onerror = error => reject(error);
+                            });
+                          };
+
+                          const newMediaPromises = files.map(async (file) => {
+                            const isVideo = file.type.startsWith('video');
+                            const limit = isVideo ? 20 * 1024 * 1024 : 10 * 1024 * 1024; // 20MB for video, 10MB for image
+                            
+                            if (file.size > limit) { 
+                              throw new Error(`الملف ${file.name} كبير جداً، الحد الأقصى ${isVideo ? '٢٠ ميجابايت للفيديو' : '١٠ ميجابايت للصورة'}`);
+                            }
+                            const base64 = await convertToBase64(file);
+                            return {
+                              type: isVideo ? 'video' : 'image' as 'image' | 'video',
+                              url: base64
+                            };
+                          });
+
+                          try {
+                            const newMedia = await Promise.all(newMediaPromises);
+                            setNewPostData(prev => ({ ...prev, media: [...prev.media, ...newMedia] }));
+                          } catch (err: any) {
+                            addNotification(err.message, 'error');
+                          }
                         }}
                       />
                       <Upload size={24} className="text-stone-300 mb-2 group-hover:scale-110 transition-transform" />
@@ -2519,26 +2788,42 @@ export default function App() {
 
                 <div className="flex gap-4 pt-4">
                   <button 
-                    onClick={() => {
+                    disabled={loading}
+                    onClick={async () => {
                       if (!newPostData.title || !newPostData.description || newPostData.media.length === 0) {
                         addNotification('يا غالي لازم تعبي البيانات وترفع صورة أو فيديو على الأقل!', 'warning');
                         return;
                       }
-                      const post: CoveragePost = {
-                        id: Math.random().toString(36).substring(7),
-                        title: newPostData.title,
-                        description: newPostData.description,
-                        media: newPostData.media,
-                        date: 'الآن'
-                      };
-                      setCoveragePosts(prev => [post, ...prev]);
-                      setShowAddMediaModal(false);
-                      setNewPostData({ title: '', description: '', media: [] });
-                      addNotification('الله يبارك فيك! تم نشر التغطية بنجاح يا أبو عبدالله 📸', 'success');
+
+                      setLoading(true);
+                      try {
+                        const postsRef = collection(db, 'coveragePosts');
+                        const postDoc = await addDoc(postsRef, {
+                          title: newPostData.title,
+                          description: newPostData.description,
+                          createdAt: serverTimestamp(),
+                          authorId: user?.uid,
+                          authorName: user?.displayName,
+                          mediaCount: newPostData.media.length
+                        });
+
+                        // Upload media and its chunks
+                        for (let i = 0; i < newPostData.media.length; i++) {
+                          await uploadChunkedMedia(postDoc.id, newPostData.media[i], i);
+                        }
+                        
+                        setShowAddMediaModal(false);
+                        setNewPostData({ title: '', description: '', media: [] });
+                        addNotification('الله يبارك فيك! تم نشر التغطية بنجاح يا أبو عبدالله 📸', 'success');
+                      } catch (err) {
+                        handleFirestoreError(err, OperationType.WRITE, 'coveragePosts');
+                      } finally {
+                        setLoading(false);
+                      }
                     }}
-                    className="flex-1 py-5 bg-indigo-600 text-white rounded-2xl text-sm font-black shadow-2xl hover:shadow-indigo-500/30 active:scale-95 transition-all"
+                    className="flex-1 py-5 bg-indigo-600 text-white rounded-2xl text-sm font-black shadow-2xl hover:shadow-indigo-500/30 active:scale-95 transition-all disabled:opacity-50"
                   >
-                    نشر التدوينة الحين
+                    {loading ? <RotateCw className="animate-spin mx-auto" size={20} /> : 'نشر التدوينة الحين'}
                   </button>
                   <button 
                     onClick={() => setShowAddMediaModal(false)}

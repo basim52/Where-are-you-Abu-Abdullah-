@@ -39,9 +39,92 @@
         "rated": { "type": "boolean", "description": "Whether this visit has been rated" }
       },
       "required": ["userId", "placeId", "timestamp"]
+    },
+    "CoveragePost": {
+      "title": "Abu Abdullah Coverage Post",
+      "description": "A blog-style post with multiple media items and a report.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "mediaCount": { "type": "number" }
+      },
+      "required": ["title", "description", "createdAt", "authorId"]
+    },
+    "CoverageMedia": {
+      "title": "Coverage Media",
+      "description": "A single media item (image or video) for a post, possibly chunked.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["image", "video"] },
+        "order": { "type": "number" },
+        "totalChunks": { "type": "number" },
+        "isChunked": { "type": "boolean" },
+        "data": { "type": "string", "description": "Base64 data or first chunk" }
+      }
+    },
+    "MediaChunk": {
+      "title": "Media Chunk",
+      "description": "A component of a larger media file.",
+      "type": "object",
+      "properties": {
+        "data": { "type": "string" },
+        "index": { "type": "number" }
+      }
+    },
+    "AppSettings": {
+      "title": "Global App Settings",
+      "description": "Global configuration like the coverage intro text.",
+      "type": "object",
+      "properties": {
+        "coverageIntro": { "type": "string" }
+      }
+    },
+    "Place": {
+      "title": "Cloud Place",
+      "description": "A place stored in Firestore to override or augment Google Maps data.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "vicinity": { "type": "string" },
+        "rating": { "type": "number" },
+        "user_ratings_total": { "type": "number" },
+        "types": { "type": "array", "items": { "type": "string" } },
+        "photos": { "type": "array", "items": { "type": "object" } },
+        "geometry": { "type": "object" }
+      }
+    },
+    "Rating": {
+      "title": "Consolidated Rating",
+      "description": "Consolidated rating for a place.",
+      "type": "object",
+      "properties": {
+        "rating": { "type": "number" },
+        "count": { "type": "number" }
+      }
     }
   },
   "firestore": {
+    "/coveragePosts/{postId}/media/{mediaId}": {
+      "schema": "CoverageMedia",
+      "description": "Images and videos attached to a post"
+    },
+    "/coveragePosts/{postId}/media/{mediaId}/chunks/{chunkId}": {
+      "schema": "MediaChunk",
+      "description": "Chunks of large media files"
+    },
+    "/places/{placeId}": {
+      "schema": "Place",
+      "description": " Abu Abdullah's curated places"
+    },
+    "/ratings/{placeId}": {
+      "schema": "Rating",
+      "description": "Aggregated ratings for places"
+    },
     "/reviews/{reviewId}": {
       "schema": "Review",
       "description": "Global collection of all user reviews"
@@ -53,6 +136,14 @@
     "/visits/{visitId}": {
       "schema": "Visit",
       "description": "Track user visits for rating reminders"
+    },
+    "/coveragePosts/{postId}": {
+      "schema": "CoveragePost",
+      "description": "Abu Abdullah's special coverages"
+    },
+    "/settings/{settingId}": {
+      "schema": "AppSettings",
+      "description": "Global app settings"
     }
   }
 }

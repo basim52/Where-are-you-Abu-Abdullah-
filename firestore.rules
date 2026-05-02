@@ -23,6 +23,23 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == "basim5252@gmail.com" && request.auth.token.email_verified == true;
+    }
+
+    // Coverage Post validation
+    function isValidCoveragePost(data) {
+      return data.keys().hasAll(['title', 'description', 'createdAt', 'media']) &&
+             data.title is string && data.title.size() <= 256 &&
+             data.description is string && data.description.size() <= 10000 &&
+             data.createdAt == request.time &&
+             data.media is list && data.media.size() <= 10;
+    }
+
     // Review validation
     function isValidReview(data) {
       return data.keys().hasAll(['placeId', 'userId', 'userName', 'userPhoto', 'rating', 'createdAt']) &&
@@ -39,6 +56,38 @@ service cloud.firestore {
 
     match /test/{docId} {
       allow read: if true;
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /places/{placeId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /ratings/{placeId} {
+      allow read: if true;
+      allow write: if true; // Allow anyone to update ratings for now, or refine if needed
+    }
+
+    match /coveragePosts/{postId} {
+      allow read: if true;
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+
+      match /media/{mediaId} {
+        allow read: if true;
+        allow write: if isAdmin();
+
+        match /chunks/{chunkId} {
+          allow read: if true;
+          allow write: if isAdmin();
+        }
+      }
     }
 
     match /reviews/{reviewId} {
