@@ -77,7 +77,10 @@ export async function testFirestoreConnection() {
 }
 
 export const signInWithGoogle = async () => {
-  console.log('Starting Google Login with Popup...', { authDomain: firebaseConfig.authDomain });
+  console.log('Starting Google Login with Popup...', { 
+    authDomain: firebaseConfig.authDomain,
+    currentHost: window.location.hostname
+  });
   try {
     const result = await signInWithPopup(auth, googleProvider);
     console.log('Login success:', result.user.email);
@@ -88,6 +91,16 @@ export const signInWithGoogle = async () => {
       message: error.message,
       stack: error.stack
     });
+    
+    // Check for common cross-origin / iframe issues
+    if (error.code === 'auth/internal-error' && error.message.includes('popup_closed_by_user')) {
+      console.warn('User closed the popup before finishing login.');
+    }
+    
+    if (error.code === 'auth/network-request-failed') {
+      console.error('Network request failed. This might be due to an ad blocker or cross-site tracking protection.');
+    }
+
     throw error;
   }
 };

@@ -369,7 +369,7 @@ export default function App() {
 🌟 تقييمنا له: ${place.internalRating?.toFixed(1) || '---'}
 
 وش قلت؟ نعتمد؟
-رابط المكان: ${place.url || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || '')}&query_place_id=${place.place_id}`}`;
+رابط المكان: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || '')}&query_place_id=${place.place_id} `;
     
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank');
@@ -786,16 +786,25 @@ export default function App() {
   }, [places, sortFilter, filter, internalRatingsMap, showFavoritesOnly, openNowOnly, priceFilter, searchQuery]);
 
   const handleLogin = async () => {
+    setLoading(true);
     try {
       await signInWithGoogle();
+      setLoading(false);
     } catch (err: any) {
+      setLoading(false);
       console.error('Login error details:', err);
+      
+      const currentHost = window.location.hostname;
+      
       if (err.code === 'auth/unauthorized-domain') {
-        alert('خطأ: النطاق الحالي غير مصرح به في Firebase. يرجى إضافة هذا النطاق إلى Authorized Domains.');
+        alert(`خطأ: النطاق الحالي (${currentHost}) غير مصرح به في Firebase.\n\nيرجى إضافة هذا النطاق إلى القائمة المسموحة (Authorized Domains) في إعدادات Firebase Authentication بالكونسول.`);
       } else if (err.code === 'auth/popup-blocked') {
-        alert('تم حظر النافذة المنبثقة. يرجى السماح بالمنبثقات لهذا الموقع.');
+        alert('تم حظر النافذة المنبثقة. يرجى السماح بالمنبثقات لهذا الموقع من إعدادات المتصفح.');
+      } else if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user') {
+        // Silent or small toast
+        console.log('User cancelled login popup');
       } else {
-        alert(`فشل تسجيل الدخول: ${err.message || 'خطأ غير معروف'}`);
+        alert(`فشل تسجيل الدخول: ${err.message || 'خطأ غير معروف'}\n\nتأكد من اتصالك بالإنترنت وأن المتصفح لا يمنع ملفات تعريف الارتباط للطرف الثالث.`);
       }
     }
   };
@@ -1674,10 +1683,10 @@ export default function App() {
                                             href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${aiTargetPlaceId}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="px-6 py-2.5 bg-white border border-stone-200 text-stone-900 rounded-xl text-xs font-black hover:bg-stone-50 transition-all flex items-center gap-2"
+                                            className="px-6 py-2.5 bg-stone-900 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-orange-500/20 hover:bg-black transition-all flex items-center gap-2"
                                           >
-                                            <Navigation size={14} className="text-blue-500" />
-                                            ودني للمكان!
+                                            <Navigation size={14} className="text-white" />
+                                            ودني للمكان! (غوغل ماب)
                                           </a>
                                        </div>
                                     )}
@@ -2149,7 +2158,20 @@ export default function App() {
                                 <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : isPlaceOpen(place) === false ? 'bg-rose-400' : 'bg-stone-300'}`} />
                                 {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
                               </span>
-                              <div className="bg-stone-50 dark:bg-stone-800 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 dark:text-stone-600 group-hover:text-white transition-all"> <ChevronRight size={16} className="rotate-180" /> </div>
+                              <div className="flex items-center gap-2">
+                                <a 
+                                  href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${place.place_id}&destination=${encodeURIComponent(place.name || '')}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-8 h-8 flex items-center justify-center bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white transition-all ring-4 ring-transparent hover:ring-blue-500/10"
+                                >
+                                  <Navigation size={14} />
+                                </a>
+                                <div className="bg-stone-50 dark:bg-stone-800 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 dark:text-stone-600 group-hover:text-white transition-all"> 
+                                  <ChevronRight size={16} className="rotate-180" /> 
+                                </div>
+                              </div>
                           </div>
                       </motion.div>
                   ))
@@ -2269,10 +2291,15 @@ export default function App() {
                 <div className="w-full sm:w-1/2 p-6 sm:p-10 overflow-y-auto no-scrollbar text-right">
                     <div className="mb-6">
                       <h2 className="text-3xl font-black text-stone-900 dark:text-white mb-2">{selectedPlace.name}</h2>
-                      <div className="flex items-center justify-end gap-2 text-stone-500 dark:text-stone-400">
-                        <p className="text-sm font-medium">{selectedPlace.formatted_address}</p>
-                        <MapPin size={16} className="flex-shrink-0 text-stone-300 dark:text-stone-600" />
-                      </div>
+                      <a 
+                        href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${selectedPlace.place_id}&destination=${encodeURIComponent(selectedPlace.name || '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-end gap-2 text-stone-500 dark:text-stone-400 hover:text-orange-500 transition-colors group/addr"
+                      >
+                        <p className="text-sm font-medium group-hover/addr:underline decoration-2 underline-offset-4">{selectedPlace.formatted_address}</p>
+                        <MapPin size={16} className="flex-shrink-0 text-stone-300 dark:text-stone-600 group-hover/addr:text-orange-400" />
+                      </a>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4 mb-8">
@@ -2291,13 +2318,13 @@ export default function App() {
 
                     <div className="flex flex-col gap-3 mb-10">
                       <a 
-                        href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${selectedPlace.place_id}`}
+                        href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${selectedPlace.place_id}&destination=${encodeURIComponent(selectedPlace.name || '')}`}
                         target="_blank" 
                         rel="noopener noreferrer" 
                         className="w-full py-5 bg-orange-500 text-white rounded-[1.5rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-all text-sm shadow-lg shadow-orange-500/20"
                       >
                         <Navigation size={20} />
-                        فتح في خرائط غوغل
+                        اتجه للمكان (خرائط غوغل)
                       </a>
                       
                       <div className="grid grid-cols-2 gap-3">
