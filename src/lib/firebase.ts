@@ -67,22 +67,26 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 }
 
 // Connection test
-export async function testFirestoreConnection() {
+export async function testFirestoreConnection(silent = false) {
   const testPath = 'test/connection';
   try {
-    // Attempt to fetch a non-existent document from a 'test' collection to verify connection
-    // We use getDocFromServer to bypass cache and verify real connectivity
     const testDoc = doc(db, 'test', 'connection');
     await getDocFromServer(testDoc);
-    console.log('Firestore connection verified');
+    if (!silent) console.log('Firestore connection verified');
   } catch (error: any) {
-    // We ignore 403 because we mostly care about 404 (= connected) vs 500/offline
-    // But since we WANT permission to read the test doc, a 403 is still indicative of rules issue
+    const isQuotaError = error?.message?.includes('Quota exceeded') || error?.message?.includes('resource-exhausted');
+    if (isQuotaError) {
+      if (!silent) console.warn("Firestore Quota exceeded during connection check.");
+      return;
+    }
+    
     if (error?.message?.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration or internet connection.");
+      if (!silent) console.error("Please check your Firebase configuration or internet connection.");
     } else {
-      console.error("Firestore connectivity check result:", error?.message);
-      handleFirestoreError(error, OperationType.GET, testPath);
+      if (!silent) {
+        console.error("Firestore connectivity check result:", error?.message);
+        handleFirestoreError(error, OperationType.GET, testPath);
+      }
     }
   }
 }

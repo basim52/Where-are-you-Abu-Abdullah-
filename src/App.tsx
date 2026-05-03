@@ -94,6 +94,7 @@ import {
   serverTimestamp, 
   orderBy,
   getDocs,
+  getDoc,
   Timestamp,
   limit
 } from 'firebase/firestore';
@@ -163,7 +164,7 @@ const INITIAL_PLACES: PlaceDetail[] = [
   }
 ];
 
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || firebaseConfig.apiKey || 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
+const GOOGLE_MAPS_API_KEY = 'AIzaSyCAv258OTjIm_A2XPE2hB_wmgoId32DxTQ';
 
 export default function App() {
   const [isMapsLoaded, setIsMapsLoaded] = useState<boolean>(false);
@@ -237,6 +238,8 @@ export default function App() {
 
   const [isEditingCoverage, setIsEditingCoverage] = useState(false);
   const [showAddMediaModal, setShowAddMediaModal] = useState(false);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [firestoreEnabled, setFirestoreEnabled] = useState(true);
   const [showAddPlaceModal, setShowAddPlaceModal] = useState(false);
   const [newPlaceData, setNewPlaceData] = useState({ name: '', vicinity: '', type: 'restaurant' as 'restaurant' | 'cafe', rating: 5 });
   const [newPostData, setNewPostData] = useState({ title: '', description: '', media: [] as { type: 'image' | 'video', url: string }[] });
@@ -260,48 +263,55 @@ export default function App() {
     setIsAdmin(isAdminEmail);
   }, [user]);
 
-  // Sync Places from Firestore
   const firestorePlacesRef = useRef<PlaceDetail[]>([]);
+
+  // Sync Places from Firestore (Optimized to get once)
   useEffect(() => {
     // If we have no places at all, start with INITIAL_PLACES
     if (places.length === 0) {
       setPlaces(INITIAL_PLACES);
     }
     
-    const unsubscribe = onSnapshot(collection(db, 'places'), (snapshot) => {
-      if (!snapshot.empty) {
-        const firestorePlaces = snapshot.docs.map(doc => ({
-          ...doc.data(),
-          id: doc.id,
-          place_id: doc.id
-        })) as PlaceDetail[];
-        firestorePlacesRef.current = firestorePlaces;
-        setPlaces(prev => {
-          const merged = [...firestorePlaces];
-          prev.forEach(p => {
-            const pid = p.place_id || p.id;
-            if (pid && !merged.find(m => (m.place_id || m.id) === pid)) {
-              merged.push(p);
-            }
+    const fetchPlaces = async () => {
+      if (!firestoreEnabled) return;
+      try {
+        const snapshot = await getDocs(collection(db, 'places'));
+        if (!snapshot.empty) {
+          const firestorePlaces = snapshot.docs.map(doc => ({
+            ...doc.data(),
+            id: doc.id,
+            place_id: doc.id
+          })) as PlaceDetail[];
+          firestorePlacesRef.current = firestorePlaces;
+          setPlaces(prev => {
+            const merged = [...firestorePlaces];
+            prev.forEach(p => {
+              const pid = p.place_id || p.id;
+              if (pid && !merged.find(m => (m.place_id || m.id) === pid)) {
+                merged.push(p);
+              }
+            });
+            return merged;
           });
-          return merged;
-        });
-      } else {
-        // If snapshot is empty, we still have our INITIAL_PLACES in state
-        // We can try to bootstrap here if we are admin
-        if (isAdmin) {
+        } else if (isAdmin) {
+          // If Firestore is empty, we still have our INITIAL_PLACES in state
+          // Bootstrap them to Firestore
           INITIAL_PLACES.forEach(async (p) => {
             try { await setDoc(doc(db, 'places', p.id || p.place_id), p); } catch (e) {}
           });
         }
+        setPlacesLoading(false);
+      } catch (error: any) {
+        if (error.message?.includes('Quota')) {
+          setFirestoreEnabled(false);
+        }
+        console.warn("Places fetch silent fail:", error.message);
+        setPlacesLoading(false);
       }
-      setPlacesLoading(false);
-    }, (error) => {
-      console.warn("Places Fetch failed:", error.message);
-      setPlacesLoading(false);
-    });
-    return () => unsubscribe();
-  }, [isAdmin]);
+    };
+
+    fetchPlaces();
+  }, [isAdmin, firestoreEnabled]);
 
   const [openNowOnly, setOpenNowOnly] = useState<boolean>(false);
   const [priceFilter, setPriceFilter] = useState<number | null>(null);
@@ -512,15 +522,14 @@ export default function App() {
 
   // Listen for Auth changes
   useEffect(() => {
-    testFirestoreConnection();
+    if (firestoreEnabled) {
+      testFirestoreConnection(true);
+    }
     const unsubscribe = onAuthStateChanged(auth, (currUser) => {
       setUser(currUser);
     });
     return () => unsubscribe();
-  }, []);
-
-  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
-  const [firestoreEnabled, setFirestoreEnabled] = useState(true);
+  }, [firestoreEnabled]);
 
   // Optimized fetch for coverage posts with caching
   const fetchCoveragePosts = async () => {
@@ -586,49 +595,60 @@ export default function App() {
     fetchCoveragePosts();
   }, []);
 
-  // Listen for app settings
+  // Listen for app settings (Optimized to get once)
   useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, 'settings', 'coverage'), (snapshot) => {
-      if (snapshot.exists()) {
-        setCoverageText(snapshot.data().coverageIntro);
+    const fetchSettings = async () => {
+      try {
+        const snapshot = await getDoc(doc(db, 'settings', 'coverage'));
+        if (snapshot.exists()) {
+          setCoverageText(snapshot.data().coverageIntro);
+          localStorage.setItem('cache_coverage_text', snapshot.data().coverageIntro);
+        }
+      } catch (error) {
+        const cachedText = localStorage.getItem('cache_coverage_text');
+        if (cachedText) setCoverageText(cachedText);
       }
-    }, (error) => {
-      console.warn("Settings fetch failed (likely no doc yet):", error.message);
-    });
-    return () => unsubscribe();
+    };
+    fetchSettings();
   }, []);
 
-  // Listen for internal reviews when a place is selected
+  // Fetch internal reviews when a place is selected (Optimized)
   useEffect(() => {
-    if (!selectedPlace?.place_id) {
+    if (!selectedPlace?.place_id || !firestoreEnabled) {
       setInternalReviews([]);
       return;
     }
 
-    const q = query(
-      collection(db, 'reviews'),
-      where('placeId', '==', selectedPlace.place_id)
-    );
+    const fetchReviews = async () => {
+      try {
+        const q = query(
+          collection(db, 'reviews'),
+          where('placeId', '==', selectedPlace.place_id)
+        );
+        const snapshot = await getDocs(q);
+        const reviews = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as InternalReview[];
+        
+        reviews.sort((a, b) => {
+          const timeA = a.createdAt?.toMillis() || 0;
+          const timeB = b.createdAt?.toMillis() || 0;
+          return timeB - timeA;
+        });
+        
+        setInternalReviews(reviews);
+      } catch (error: any) {
+        if (error.message?.includes('Quota') || error.message?.includes('exhausted')) {
+          setFirestoreEnabled(false);
+        } else {
+          console.warn("Reviews fetch silent fail:", error.message);
+        }
+      }
+    };
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const reviews = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as InternalReview[];
-      
-      reviews.sort((a, b) => {
-        const timeA = a.createdAt?.toMillis() || 0;
-        const timeB = b.createdAt?.toMillis() || 0;
-        return timeB - timeA;
-      });
-      
-      setInternalReviews(reviews);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'reviews');
-    });
-
-    return () => unsubscribe();
-  }, [selectedPlace?.place_id]);
+    fetchReviews();
+  }, [selectedPlace?.place_id, firestoreEnabled]);
 
   // Fetch all ratings once (Optimized to avoid constant stream)
   const fetchAllRatings = async () => {
@@ -682,6 +702,7 @@ export default function App() {
     }
 
     const checkReminders = async () => {
+      if (!firestoreEnabled) return;
       try {
         const visitsRef = collection(db, 'visits');
         const q = query(
@@ -716,7 +737,7 @@ export default function App() {
   }, [user]);
 
   const recordVisit = async (place: google.maps.places.PlaceResult) => {
-    if (!user || !place.place_id) return;
+    if (!user || !place.place_id || !firestoreEnabled) return;
     try {
       const visitsRef = collection(db, 'visits');
       const q = query(
@@ -741,7 +762,7 @@ export default function App() {
   };
 
   const skipReminder = async () => {
-    if (!pendingReminder || !pendingReminder.id) return;
+    if (!pendingReminder || !pendingReminder.id || !firestoreEnabled) return;
     try {
       await deleteDoc(doc(db, 'visits', pendingReminder.id));
       setPendingReminder(null);
@@ -756,27 +777,30 @@ export default function App() {
     setPendingReminder(null);
   };
 
-  // Listen for favorites
+  // Fetch favorites (Optimized to get once)
   useEffect(() => {
-    if (!user) {
+    if (!user || !firestoreEnabled) {
       setFavorites([]);
       return;
     }
 
-    const q = query(
-      collection(db, 'favorites'),
-      where('userId', '==', user.uid)
-    );
+    const fetchFavorites = async () => {
+      try {
+        const q = query(
+          collection(db, 'favorites'),
+          where('userId', '==', user.uid)
+        );
+        const snapshot = await getDocs(q);
+        const favIds = snapshot.docs.map(doc => doc.data().placeId as string);
+        setFavorites(favIds);
+      } catch (error: any) {
+        if (error.message?.includes('Quota')) setFirestoreEnabled(false);
+        console.warn("Favorites fetch silent fail:", error.message);
+      }
+    };
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const favIds = snapshot.docs.map(doc => doc.data().placeId as string);
-      setFavorites(favIds);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'favorites');
-    });
-
-    return () => unsubscribe();
-  }, [user]);
+    fetchFavorites();
+  }, [user, firestoreEnabled]);
 
   // Smart Filtering & Sorting Logic
   useEffect(() => {
