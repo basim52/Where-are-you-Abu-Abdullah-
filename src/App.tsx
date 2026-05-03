@@ -1298,6 +1298,7 @@ export default function App() {
 
   const generateMoodRecommendation = async () => {
     if (!userLocation) {
+      addNotification('نحتاج موقعك عشان نظهر أفضل التوصيات يا غالي!', 'warning');
       if (!sessionStorage.getItem('locationPromptDismissed')) {
         setIsLocationPromptVisible(true);
       }
@@ -1567,14 +1568,22 @@ export default function App() {
             className="flex flex-col"
           >
             {/* Landing Hero Section */}
-            <section className="relative h-[85vh] min-h-[600px] flex flex-col items-center justify-center text-center px-6 overflow-hidden">
+            <section className="relative h-[92vh] min-h-[680px] flex flex-col items-center justify-center text-center px-6 overflow-hidden">
               <div className="absolute inset-0 z-0">
-                <img 
-                  src="https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&q=80&w=2000" 
+                <motion.img 
+                  initial={{ scale: 1 }}
+                  animate={{ scale: 1.15 }}
+                  transition={{ duration: 20, repeat: Infinity, repeatType: "reverse", ease: "linear" }}
+                  src="https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&q=80&w=2000" 
                   className="w-full h-full object-cover"
-                  alt="Cafe atmosphere"
+                  alt="Atmosphere"
                 />
-                <div className="absolute inset-0 bg-gradient-to-b from-stone-900/60 via-stone-900/40 to-stone-900/80 backdrop-blur-[2px]" />
+                <div className="absolute inset-0 bg-gradient-to-b from-stone-900/90 via-stone-900/20 to-stone-900/95 backdrop-blur-[0.5px]" />
+                {/* Decorative Mesh Gradient Overlay */}
+                <div className="absolute inset-0 opacity-30 mix-blend-overlay">
+                  <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-orange-500 blur-[120px] animate-pulse" />
+                  <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-amber-600 blur-[120px] animate-pulse delay-700" />
+                </div>
               </div>
 
               <motion.div 
@@ -1596,7 +1605,7 @@ export default function App() {
                   وينك يا <span className="text-orange-500">أبو عبدالله؟</span>
                 </h1>
                 <p className="text-xl md:text-2xl text-stone-200 font-bold mb-12 max-w-2xl mx-auto leading-relaxed">
-                  اكتشف أشهى المطاعم والمقاهي المختصة في سيهات والشرقية بتغطيات حصرية وخيارات ذكية.
+                  اكتشف أشهى المطاعم والمقاهي المختصة من حولك بتغطيات حصرية وخيارات ذكية.
                 </p>
 
                 <div className="flex flex-col md:flex-row items-center gap-4 max-w-3xl mx-auto">
@@ -1619,6 +1628,38 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Quick Smart Actions */}
+                <div className="mt-8 flex flex-wrap justify-center gap-3">
+                  <button 
+                    onClick={() => {
+                      setShowMoodSection(true);
+                      setTimeout(() => {
+                        document.getElementById('mood-section')?.scrollIntoView({ behavior: 'smooth' });
+                      }, 100);
+                    }}
+                    className="px-6 py-4 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-2xl text-white font-black text-sm transition-all flex items-center gap-2"
+                  >
+                    <Sparkles size={18} className="text-orange-400" />
+                    اختار وفق مزاجك
+                  </button>
+                  <button 
+                    onClick={handleSurpriseMe}
+                    className="px-6 py-4 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-2xl text-white font-black text-sm transition-all flex items-center gap-2"
+                  >
+                    <Dices size={18} className="text-emerald-400" />
+                    اختار لي على ذوقك!
+                  </button>
+                  <button 
+                    onClick={() => {
+                      addNotification('تحدي اليوم: جرب مطعم ما قد زرته أبداً!', 'info');
+                    }}
+                    className="px-6 py-4 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-2xl text-white font-black text-sm transition-all flex items-center gap-2"
+                  >
+                    <Zap size={18} className="text-amber-400" />
+                    تحداني!
+                  </button>
+                </div>
+
                 <button 
                   onClick={() => {
                     requestLocation();
@@ -1629,7 +1670,7 @@ export default function App() {
                   <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center group-hover:bg-white/20 transition-all">
                     <Navigation size={18} />
                   </div>
-                  اكتشف الأماكن القريبة مني
+                  اكتشف الأماكن من حولي
                 </button>
               </motion.div>
 
@@ -1644,6 +1685,43 @@ export default function App() {
               </motion.div>
             </section>
 
+            {/* Smart Assistant Entry */}
+            <section className="py-16 px-6 flex flex-col items-center gap-6 relative z-10" id="mood-section">
+               <motion.button 
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  whileInView={{ scale: 1, opacity: 1 }}
+                  onClick={() => {
+                    if (!showMoodSection) {
+                      setShowMoodSection(true);
+                    } else {
+                      generateMoodRecommendation();
+                    }
+                  }}
+                  className={`w-32 h-32 rounded-full flex flex-col items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.2)] border-4 transition-all group ${showMoodSection ? 'bg-orange-500 border-orange-200 text-white' : 'bg-stone-900 border-white text-white hover:bg-black'}`}
+               >
+                  <Sparkles size={44} className={`${showMoodSection ? 'animate-bounce' : 'text-orange-400 group-hover:animate-pulse'}`} />
+                  <span className="text-[11px] font-black mt-2 tracking-widest">{showMoodSection ? 'اسأل أبو عبدالله' : 'خويك الذكي'}</span>
+               </motion.button>
+               {!showMoodSection && (
+                  <motion.p 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: [0.4, 1, 0.4] }}
+                    transition={{ duration: 2, repeat: Infinity }}
+                    className="text-stone-400 text-[10px] font-black uppercase tracking-[0.2em] text-center"
+                  >
+                    انقر هنا لمساعدتك في تخير المكان <br /> المناسب "اسأل أبو عبدالله"
+                  </motion.p>
+               )}
+            </section>
+
+            <AnimatePresence>
+                {showMoodSection && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 50 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 50 }}
+                        className="px-6 pb-20 relative"
+                    >
                         <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                           <BrainCircuit size={120} />
                         </div>
@@ -1733,24 +1811,25 @@ export default function App() {
                            </div>
                         </div>
 
-                        <div className="mt-10 flex flex-col items-center gap-6">
+                        <div className="fixed bottom-32 right-6 z-[200]">
                           <button 
                             onClick={generateMoodRecommendation} 
                             disabled={isAiLoading} 
-                            className={`group relative px-12 py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${isAiLoading ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-stone-900 text-white hover:bg-black hover:shadow-2xl active:scale-95'}`}
+                            className={`w-20 h-20 rounded-full flex flex-col items-center justify-center shadow-[0_30px_60px_rgba(0,0,0,0.5)] transition-all ${isAiLoading ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-stone-900 text-white hover:bg-black hover:scale-110 active:scale-95 border-4 border-orange-500'}`}
                           >
                             {isAiLoading ? (
-                              <div className="flex items-center gap-3">
-                                <div className="w-5 h-5 border-2 border-stone-300 border-t-orange-500 rounded-full animate-spin" />
-                                <span>جاري تحليل مزاجك...</span>
-                              </div>
+                              <RotateCw className="animate-spin" size={28} />
                             ) : (
-                              <div className="flex items-center gap-3">
-                                <Sparkles size={18} className="text-orange-400 animate-pulse" />
-                                <span>اعطني رأيك يا أبو عبدالله</span>
-                              </div>
+                              <>
+                                <Sparkles size={32} className="text-orange-400 animate-pulse" />
+                                <span className="text-[8px] font-black mt-1 uppercase tracking-tighter">توصية</span>
+                              </>
                             )}
                           </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
                           <AnimatePresence>
                             {aiRecommendation && (
@@ -1798,7 +1877,6 @@ export default function App() {
                               </motion.div>
                             )}
                           </AnimatePresence>
-                        </div>
                     </motion.div>
         ) : (
           <>
@@ -2232,10 +2310,9 @@ export default function App() {
                                 <button 
                                   onClick={generateMoodRecommendation}
                                   disabled={isAiLoading}
-                                  className="w-full py-4 bg-stone-900 text-white rounded-2xl font-black text-sm shadow-xl hover:bg-black transition-all active:scale-95 flex items-center justify-center gap-2"
+                                  className={`fixed bottom-24 right-6 w-16 h-16 rounded-full flex items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all z-[150] ${isAiLoading ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-stone-900 text-white hover:bg-black active:scale-110 border-4 border-white dark:border-stone-800'}`}
                                 >
-                                  {isAiLoading ? <RotateCw className="animate-spin" size={18} /> : <Sparkles size={18} />}
-                                  هاتها يا أبو عبدالله!
+                                  {isAiLoading ? <RotateCw className="animate-spin" size={24} /> : <Sparkles size={28} className="text-orange-400 animate-pulse group-hover:scale-110 transition-transform" />}
                                 </button>
                              </div>
                           <AnimatePresence>
@@ -2728,7 +2805,7 @@ export default function App() {
           }}
           className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${showMoodSection ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400'}`}
         >
-          <Ghost size={20} className={showMoodSection ? 'animate-bounce' : ''} />
+          <Sparkles size={20} className={showMoodSection ? 'animate-bounce text-orange-400' : ''} />
           <span className="text-[9px] font-black uppercase tracking-tighter">مزاجك</span>
         </button>
 
