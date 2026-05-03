@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">وين يا أبو عبدالله؟</string>
+    <string name="title_activity_main">وين يا أبو عبدالله؟</string>
+    <string name="package_name">com.wyn.abuabdullah</string>
+    <string name="custom_url_scheme">com.wyn.abuabdullah</string>
+</resources>

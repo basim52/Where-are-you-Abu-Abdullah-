@@ -22,6 +22,6 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["vite/client", "google.maps"]
+    "types": ["vite/client", "google.maps", "vite-plugin-pwa/client"]
   }
 }

@@ -40,6 +40,7 @@ import {
   Trash2,
   Plus,
   Upload,
+  Download,
   Ghost,
   BrainCircuit,
   ChefHat,
@@ -76,6 +77,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
+import firebaseConfig from '../firebase-applet-config.json';
 import { auth, db, signInWithGoogle, testFirestoreConnection, handleFirestoreError, OperationType } from './lib/firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { 
@@ -158,7 +160,7 @@ const INITIAL_PLACES: PlaceDetail[] = [
   }
 ];
 
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || firebaseConfig.apiKey || 'AIzaSyDJW2ZO5atDhKGRZf3OCoLCMq2VIC0NsVA';
 
 export default function App() {
   const [isMapsLoaded, setIsMapsLoaded] = useState<boolean>(false);
@@ -169,7 +171,9 @@ export default function App() {
   const [placesLoading, setPlacesLoading] = useState(true);
   const [userLocation, setUserLocation] = useState<google.maps.LatLngLiteral | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<PlaceDetail | null>(null);
-  const [viewMode, setViewMode] = useState<'grid' | 'map' | 'coverage'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'map' | 'coverage' | 'menus' | 'landing'>('landing');
+  const [menuDistance, setMenuDistance] = useState<number>(5) // 5km as default
+  const [menuPriceLevels, setMenuPriceLevels] = useState<number[]>([1, 2, 3, 4]);
   const [coverageText, setCoverageText] = useState<string>('مرحباً بكم في تغطياتي الخاصة! هنا أشارككم أفضل اللحظات والأماكن التي زرتها شخصياً. أبو عبدالله دائماً في خدمتكم لاختيار الأفضل.');
   
   interface CoveragePost {
@@ -435,6 +439,35 @@ export default function App() {
   const [pendingReminder, setPendingReminder] = useState<Visit | null>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '', photo: '' });
+
+  // PWA Install State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallButton, setShowInstallButton] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallButton(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      console.log('User accepted the install prompt');
+    } else {
+      console.log('User dismissed the install prompt');
+    }
+    setDeferredPrompt(null);
+    setShowInstallButton(false);
+  };
 
   // Favorites state
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -790,6 +823,7 @@ export default function App() {
     try {
       await signInWithGoogle();
       setLoading(false);
+      addNotification('تم تسجيل الدخول بنجاح', 'success');
     } catch (err: any) {
       setLoading(false);
       console.error('Login error details:', err);
@@ -797,14 +831,13 @@ export default function App() {
       const currentHost = window.location.hostname;
       
       if (err.code === 'auth/unauthorized-domain') {
-        alert(`خطأ: النطاق الحالي (${currentHost}) غير مصرح به في Firebase.\n\nيرجى إضافة هذا النطاق إلى القائمة المسموحة (Authorized Domains) في إعدادات Firebase Authentication بالكونسول.`);
+        addNotification(`يجب إضافة النطاق (${currentHost}) إلى Authorized Domains في Firebase.`, 'error');
       } else if (err.code === 'auth/popup-blocked') {
-        alert('تم حظر النافذة المنبثقة. يرجى السماح بالمنبثقات لهذا الموقع من إعدادات المتصفح.');
-      } else if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user') {
-        // Silent or small toast
-        console.log('User cancelled login popup');
+        addNotification('تم حظر النافذة المنبثقة. يرجى السماح بها من المتصفح.', 'error');
+      } else if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user' || (err.code === 'auth/internal-error' && err.message?.includes('popup_closed_by_user'))) {
+        // User closed it, no notification needed
       } else {
-        alert(`فشل تسجيل الدخول: ${err.message || 'خطأ غير معروف'}\n\nتأكد من اتصالك بالإنترنت وأن المتصفح لا يمنع ملفات تعريف الارتباط للطرف الثالث.`);
+        addNotification(`فشل تسجيل الدخول: ${err.message || 'خطأ غير معروف'}`, 'error');
       }
     }
   };
@@ -836,7 +869,7 @@ export default function App() {
         });
       }
     } catch (err) {
-      alert('حدث خطأ في تحديث المفضلة.');
+      addNotification('حدث خطأ في تحديث المفضلة.', 'error');
       handleFirestoreError(err, OperationType.WRITE, 'favorites');
     }
   };
@@ -888,7 +921,7 @@ export default function App() {
         setReviewForm({ rating: 5, comment: '', photo: '' });
       }, 2000);
     } catch (err) {
-      alert('فشل حفظ التقييم. حاول مرة أخرى.');
+      addNotification('فشل حفظ التقييم. حاول مرة أخرى.', 'error');
       handleFirestoreError(err, OperationType.WRITE, 'reviews');
     } finally {
       setIsSubmittingReview(false);
@@ -899,7 +932,7 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 10 * 1024 * 1024) {
-        alert('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 10 ميجابايت.');
+        addNotification('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 10 ميجابايت.', 'warning');
         return;
       }
 
@@ -938,12 +971,12 @@ export default function App() {
         };
         img.onerror = () => {
           setIsUploadingPhoto(false);
-          alert('فشل في تحميل الصورة.');
+          addNotification('فشل في تحميل الصورة.', 'error');
         };
       };
       reader.onerror = () => {
         setIsUploadingPhoto(false);
-        alert('فشل في قراءة الملف.');
+        addNotification('فشل في قراءة الملف.', 'error');
       };
       reader.readAsDataURL(file);
     }
@@ -968,7 +1001,14 @@ export default function App() {
       setApiKeyError(false);
     }).catch(e => {
       console.error('Error loading Google Maps:', e);
-      setError('فشل تحميل خرائط غوغل. تأكد من أن مفتاح API صالح ومفعل.');
+      // Detailed error message for common issues
+      if (e.message?.includes('InvalidKeyMapError')) {
+        setError('خطأ في مفتاح الخرائط: المفتاح المستخدم غير صالح أو لم يتم تفعيل Maps JavaScript API له.');
+      } else if (e.message?.includes('RefererNotAllowedMapError')) {
+        setError('خطأ في الخرائط: هذا النطاق (Domain) غير مسموح له باستخدام هذا المفتاح.');
+      } else {
+        setError('فشل تحميل خرائط غوغل. تأكد من تفعيل "Maps JavaScript API" و "Places API" في Google Cloud Console.');
+      }
       setApiKeyError(true);
     });
   }, []);
@@ -1073,13 +1113,16 @@ export default function App() {
     if (query) {
       placesServiceRef.current?.textSearch({ ...searchParams, query }, handleResults);
     } else {
+      const type = (viewMode === 'menus' && filter === 'all') ? 'restaurant' : (filter === 'all' ? 'restaurant' : filter);
+      const keyword = (viewMode === 'menus' && filter === 'all') ? 'restaurant cafe menu' : (filter === 'all' ? 'restaurant cafe' : undefined);
+      
       placesServiceRef.current?.nearbySearch({ 
         ...searchParams, 
-        type: filter === 'all' ? 'restaurant' : filter, 
-        keyword: filter === 'all' ? 'restaurant cafe' : undefined 
+        type, 
+        keyword
       }, handleResults);
     }
-  }, [filter, isMapsLoaded, searchRadius, userLocation]);
+  }, [filter, isMapsLoaded, searchRadius, userLocation, viewMode]);
 
   const requestLocation = () => {
     setIsLocationPromptVisible(false);
@@ -1099,9 +1142,12 @@ export default function App() {
 
   useEffect(() => {
     if (isMapsLoaded && !searchQuery) {
-        findNearby();
+        const radius = viewMode === 'menus' ? menuDistance * 1000 : searchRadius;
+        // In menu mode, we want to ensure we're looking at food places if no specific filter is set
+        const effectiveFilter = viewMode === 'menus' && filter === 'all' ? 'restaurant' : filter;
+        findNearby(undefined, radius);
     }
-  }, [filter, findNearby, isMapsLoaded, searchQuery, searchRadius]);
+  }, [filter, findNearby, isMapsLoaded, searchQuery, searchRadius, viewMode, menuDistance]);
 
   useEffect(() => {
     if (viewMode === 'map' && mapContainerRef.current && userLocation && isMapsLoaded) {
@@ -1197,6 +1243,23 @@ export default function App() {
   };
 
   const handlePlaceSelect = (placeId: string) => getPlaceDetails(placeId);
+
+  const navigateToPlace = (placeId: string, name?: string) => {
+    if (!placeId) return;
+    
+    const destination = name ? encodeURIComponent(name) : '';
+    // Universal Link format - using "maps.google.com" often works better for triggering native apps
+    const url = `https://www.google.com/maps/dir/?api=1&destination_place_id=${placeId}${destination ? `&destination=${destination}` : ''}&travelmode=driving&dir_action=navigate`;
+    
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    
+    if (isMobile) {
+      // Use location.href on mobile to allow the OS to intercept the URL and open the native app
+      window.location.href = url;
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
 
   useEffect(() => {
     if (selectedPlace?.place_id && internalRatingsMap[selectedPlace.place_id]) {
@@ -1381,90 +1444,109 @@ export default function App() {
         // Just prepare it
       }
     } else {
-      alert('لازم تبحث أول يا غالي عشان أختار لك!');
+      addNotification('لازم تبحث أول يا غالي عشان أختار لك!', 'warning');
     }
   };
 
   return (
     <div className="min-h-screen bg-[#FDFCFB] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans selection:bg-orange-100 pb-24 md:pb-0 transition-colors duration-500" dir="rtl">
-      <header className="sticky top-0 z-40 bg-white/95 dark:bg-stone-900/95 backdrop-blur-xl border-b border-stone-100 dark:border-stone-800 py-3 sm:h-20 flex items-center shadow-sm transition-colors">
-        <div className="max-w-7xl mx-auto px-4 w-full flex flex-col sm:flex-row items-center justify-between gap-4 sm:gap-3">
-          <div className="flex items-center justify-center sm:justify-start gap-3 shrink-0 sm:order-1 w-full sm:w-auto">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white dark:bg-stone-800 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-md rotate-3 transition-transform overflow-hidden">
-              <Logo className="w-full h-full p-1" />
-            </div>
-            <div className="sm:block hidden">
-              <h1 className="text-lg sm:text-xl font-black tracking-tight leading-none mb-0.5">وين يا أبو عبدالله؟</h1>
-              <p className="text-[9px] text-stone-400 dark:text-stone-500 font-bold uppercase tracking-widest">اكتشف وجهتك التالية</p>
-            </div>
-            <button 
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="w-10 h-10 flex items-center justify-center bg-stone-50 dark:bg-stone-800 text-stone-500 dark:text-stone-400 rounded-xl hover:bg-stone-100 dark:hover:bg-stone-700 transition-all border border-stone-100 dark:border-stone-700"
-            >
-              {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-            </button>
-            <button 
-              onClick={requestLocation}
-              className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all border ${userLocation ? 'bg-orange-500 text-white border-orange-400 shadow-lg shadow-orange-500/20' : 'bg-stone-50 dark:bg-stone-800 text-stone-500 dark:text-stone-400 border-stone-100 dark:border-stone-700'}`}
-              title="تفعيل الموقع"
-            >
-              <Navigation size={18} className={!userLocation ? 'animate-pulse' : ''} />
-            </button>
-          </div>
-          
-          <form onSubmit={handleSearch} className="w-full sm:flex-1 sm:max-w-md relative group order-3 sm:order-2">
-            <Search className={`absolute right-3 top-1/2 -translate-y-1/2 ${loading ? 'text-orange-500 animate-pulse' : 'text-stone-400'} group-focus-within:text-orange-500 transition-colors pointer-events-none`} size={16} />
-            <input 
-              ref={searchInputRef} 
-              type="text" 
-              placeholder="ابحث عن مطعم أو مقهى..." 
-              value={searchQuery} 
-              onChange={(e) => setSearchQuery(e.target.value)} 
-              className="w-full h-11 sm:h-12 pr-10 pl-3 bg-stone-100/50 border border-transparent focus:border-orange-500 focus:bg-white rounded-xl sm:rounded-2xl transition-all outline-none text-sm font-medium shadow-inner placeholder:text-stone-400" 
-            />
-          </form>
-
-          <div className="flex items-center gap-2 order-2 sm:order-3 self-end sm:self-center">
-            {user ? (
-              <div className="flex items-center gap-2 bg-stone-50 p-1 rounded-xl border border-stone-100">
-                <img src={user.photoURL || ''} className="w-8 h-8 rounded-lg bg-white shadow-sm" alt="user" referrerPolicy="no-referrer" />
-                <button 
-                  onClick={() => signOut(auth)} 
-                  className="p-2 text-stone-400 hover:text-rose-500 transition-colors flex items-center justify-center min-w-[40px] min-h-[40px]"
-                >
-                  <LogOut size={18} />
-                </button>
+      {viewMode !== 'landing' && (
+        <header className="sticky top-0 z-40 bg-white/95 dark:bg-stone-900/95 backdrop-blur-xl border-b border-stone-100 dark:border-stone-800 py-3 sm:h-20 flex items-center shadow-sm transition-colors">
+          <div className="max-w-7xl mx-auto px-4 w-full flex flex-col sm:flex-row items-center justify-between gap-4 sm:gap-3">
+            <div className="flex items-center justify-center sm:justify-start gap-3 shrink-0 sm:order-1 w-full sm:w-auto">
+              <div 
+                className="w-10 h-10 sm:w-12 sm:h-12 bg-white dark:bg-stone-800 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-md rotate-3 transition-transform overflow-hidden cursor-pointer"
+                onClick={() => setViewMode('landing')}
+              >
+                <Logo className="w-full h-full p-1" />
               </div>
-            ) : (
-              <div className="relative group/login">
-                <button 
-                  onClick={handleLogin} 
-                  className="w-11 h-11 flex items-center justify-center bg-stone-900 text-white rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
-                >
-                  <UserIcon size={20} />
-                </button>
-                <div className="absolute top-full left-0 mt-3 p-3 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl opacity-0 group-hover/login:opacity-100 transition-opacity pointer-events-none w-64 z-50 text-right">
-                  <p className="text-[10px] text-stone-600 dark:text-stone-400 font-bold leading-relaxed">
-                    إذا واجهت مشكلة في الدخول على Vercel، تأكد من إضافة النطاق إلى القائمة المسموحة (Authorized Domains) في إعدادات Firebase Authentication.
-                  </p>
+              <div className="sm:block hidden">
+                <h1 className="text-lg sm:text-xl font-black tracking-tight leading-none mb-0.5">وين يا أبو عبدالله؟</h1>
+                <p className="text-[9px] text-stone-400 dark:text-stone-500 font-bold uppercase tracking-widest">اكتشف وجهتك التالية</p>
+              </div>
+              <button 
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className="w-10 h-10 flex items-center justify-center bg-stone-50 dark:bg-stone-800 text-stone-500 dark:text-stone-400 rounded-xl hover:bg-stone-100 dark:hover:bg-stone-700 transition-all border border-stone-100 dark:border-stone-700"
+              >
+                {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
+              <button 
+                onClick={requestLocation}
+                className={`w-10 h-10 flex items-center justify-center rounded-xl transition-all border ${userLocation ? 'bg-orange-500 text-white border-orange-400 shadow-lg shadow-orange-500/20' : 'bg-stone-50 dark:bg-stone-800 text-stone-500 dark:text-stone-400 border-stone-100 dark:border-stone-700'}`}
+                title="تفعيل الموقع"
+              >
+                <Navigation size={18} className={!userLocation ? 'animate-pulse' : ''} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleSearch} className="w-full sm:flex-1 sm:max-w-md relative group order-3 sm:order-2">
+              <Search className={`absolute right-3 top-1/2 -translate-y-1/2 ${loading ? 'text-orange-500 animate-pulse' : 'text-stone-400'} group-focus-within:text-orange-500 transition-colors pointer-events-none`} size={16} />
+              <input 
+                ref={searchInputRef} 
+                type="text" 
+                placeholder="ابحث عن مطعم أو مقهى..." 
+                value={searchQuery} 
+                onChange={(e) => setSearchQuery(e.target.value)} 
+                className="w-full h-11 sm:h-12 pr-10 pl-3 bg-stone-100/50 border border-transparent focus:border-orange-500 focus:bg-white rounded-xl sm:rounded-2xl transition-all outline-none text-sm font-medium shadow-inner placeholder:text-stone-400" 
+              />
+            </form>
+  
+            <div className="flex items-center gap-2 order-2 sm:order-3 self-end sm:self-center">
+              {user ? (
+                <div className="flex items-center gap-2 bg-stone-50 p-1 rounded-xl border border-stone-100">
+                  <img src={user.photoURL || ''} className="w-8 h-8 rounded-lg bg-white shadow-sm" alt="user" referrerPolicy="no-referrer" />
+                  <button 
+                    onClick={() => signOut(auth)} 
+                    className="p-2 text-stone-400 hover:text-rose-500 transition-colors flex items-center justify-center min-w-[40px] min-h-[40px]"
+                  >
+                    <LogOut size={18} />
+                  </button>
                 </div>
-              </div>
-            )}
-            <button 
-              onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')} 
-              className="w-11 h-11 flex items-center justify-center bg-white border border-stone-200 rounded-xl text-stone-600 hover:border-orange-500 hover:text-orange-500 transition-all shadow-sm sm:hidden"
-            >
-              {viewMode === 'grid' ? <MapViewIcon size={20} /> : <LayoutGrid size={20} />}
-            </button>
-            <button 
-              onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')} 
-              className="w-12 h-12 hidden sm:flex items-center justify-center bg-white border border-stone-200 rounded-2xl text-stone-600 hover:border-orange-500 hover:text-orange-500 transition-all shadow-sm"
-            >
-              {viewMode === 'grid' ? <MapViewIcon size={20} /> : <LayoutGrid size={20} />}
-            </button>
+              ) : (
+                <div className="relative group/login">
+                  <button 
+                    onClick={handleLogin} 
+                    className="w-11 h-11 flex items-center justify-center bg-stone-900 text-white rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
+                  >
+                    <UserIcon size={20} />
+                  </button>
+                  <div className="absolute top-full left-0 mt-3 p-3 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl opacity-0 group-hover/login:opacity-100 transition-opacity pointer-events-none w-64 z-50 text-right">
+                    <p className="text-[10px] text-stone-600 dark:text-stone-400 font-bold leading-relaxed">
+                      إذا واجهت مشكلة في الدخول على Vercel، تأكد من إضافة النطاق إلى القائمة المسموحة (Authorized Domains) في إعدادات Firebase Authentication.
+                    </p>
+                  </div>
+                </div>
+              )}
+              <button 
+                onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')} 
+                className="w-11 h-11 flex items-center justify-center bg-white border border-stone-200 rounded-xl text-stone-600 hover:border-orange-500 hover:text-orange-500 transition-all shadow-sm sm:hidden"
+              >
+                {viewMode === 'grid' ? <MapViewIcon size={20} /> : <LayoutGrid size={20} />}
+              </button>
+              <button 
+                onClick={() => {
+                  if (viewMode === 'menus') {
+                    setViewMode('grid');
+                  } else {
+                    setViewMode('menus');
+                    setShowMoodSection(false);
+                  }
+                }} 
+                className={`w-12 h-12 hidden sm:flex items-center justify-center border rounded-2xl transition-all shadow-sm ${viewMode === 'menus' ? 'bg-orange-500 text-white border-orange-400' : 'bg-white border-stone-200 text-stone-600 hover:border-orange-500 hover:text-orange-500'}`}
+                title="قوائم الطعام"
+              >
+                <ChefHat size={20} />
+              </button>
+              <button 
+                onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')} 
+                className="w-12 h-12 hidden sm:flex items-center justify-center bg-white border border-stone-200 rounded-2xl text-stone-600 hover:border-orange-500 hover:text-orange-500 transition-all shadow-sm"
+              >
+                {viewMode === 'grid' ? <MapViewIcon size={20} /> : <LayoutGrid size={20} />}
+              </button>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       {error && (
         <div className="bg-rose-50 border-b border-rose-100 p-4 sticky top-20 z-30">
@@ -1477,68 +1559,91 @@ export default function App() {
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-4 py-10 sm:py-16 lg:py-20">
-        <section className="mb-12 text-center relative">
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <button 
-                onClick={() => setShowMoodSection(!showMoodSection)} 
-                className={`group relative px-8 py-4 bg-white border-2 rounded-3xl transition-all flex items-center gap-4 ${showMoodSection ? 'border-orange-500 shadow-xl' : 'border-stone-100 hover:border-orange-300'}`}
+      <main className={`${viewMode === 'landing' ? '' : 'max-w-7xl mx-auto px-4 py-10 sm:py-16 lg:py-20'}`}>
+        {viewMode === 'landing' ? (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            className="flex flex-col"
+          >
+            {/* Landing Hero Section */}
+            <section className="relative h-[85vh] min-h-[600px] flex flex-col items-center justify-center text-center px-6 overflow-hidden">
+              <div className="absolute inset-0 z-0">
+                <img 
+                  src="https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&q=80&w=2000" 
+                  className="w-full h-full object-cover"
+                  alt="Cafe atmosphere"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-stone-900/60 via-stone-900/40 to-stone-900/80 backdrop-blur-[2px]" />
+              </div>
+
+              <motion.div 
+                initial={{ y: 30, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.2 }}
+                className="relative z-10 max-w-4xl w-full"
               >
-                  <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center text-orange-600">
-                    <motion.div
-                      animate={isAiLoading ? {
-                        scale: [1, 1.2, 1],
-                        rotate: [0, 10, -10, 0],
-                        opacity: [1, 0.5, 1]
-                      } : {
-                        y: [0, -4, 0]
-                      }}
-                      transition={{ duration: isAiLoading ? 0.5 : 2, repeat: Infinity }}
-                    >
-                      <Ghost size={24} />
-                    </motion.div>
+                <div className="mb-8 inline-block">
+                   <motion.div 
+                     animate={{ scale: [1, 1.05, 1] }}
+                     transition={{ repeat: Infinity, duration: 4 }}
+                     className="bg-orange-500 text-white px-6 py-2 rounded-full text-sm font-black tracking-widest uppercase mb-4"
+                   >
+                     دليلك الرسمي
+                   </motion.div>
+                </div>
+                <h1 className="text-6xl md:text-8xl font-black text-white mb-6 leading-tight tracking-tighter">
+                  وينك يا <span className="text-orange-500">أبو عبدالله؟</span>
+                </h1>
+                <p className="text-xl md:text-2xl text-stone-200 font-bold mb-12 max-w-2xl mx-auto leading-relaxed">
+                  اكتشف أشهى المطاعم والمقاهي المختصة في سيهات والشرقية بتغطيات حصرية وخيارات ذكية.
+                </p>
+
+                <div className="flex flex-col md:flex-row items-center gap-4 max-w-3xl mx-auto">
+                  <div className="relative flex-1 w-full group">
+                    <input 
+                      type="text"
+                      placeholder="عن أي نكهة تبحث اليوم؟..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && setViewMode('grid')}
+                      className="w-full h-16 md:h-20 px-8 pr-16 bg-white/95 backdrop-blur-xl rounded-3xl text-lg font-bold text-stone-900 focus:outline-none focus:ring-4 focus:ring-orange-500/30 transition-all shadow-2xl"
+                    />
+                    <Search className="absolute right-6 top-1/2 -translate-y-1/2 text-stone-400 group-focus-within:text-orange-500 transition-colors" size={24} />
                   </div>
-                  <div className="text-right">
-                      <h3 className="text-xl font-black text-stone-900 leading-tight">اختار وفق مزاجك</h3>
-                      <p className="text-stone-400 text-[10px] font-bold uppercase tracking-widest">دع الذكاء الصناعي يقرر عنك</p>
+                  <button 
+                    onClick={() => setViewMode('grid')}
+                    className="h-16 md:h-20 px-10 bg-orange-500 hover:bg-orange-600 text-white rounded-3xl font-black text-lg shadow-xl hover:shadow-orange-500/20 active:scale-95 transition-all flex items-center justify-center gap-3"
+                  >
+                    ابحث الآن
+                  </button>
+                </div>
+
+                <button 
+                  onClick={() => {
+                    requestLocation();
+                    setViewMode('grid');
+                  }}
+                  className="mt-8 text-white/80 hover:text-white font-bold flex items-center gap-2 mx-auto transition-all group"
+                >
+                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center group-hover:bg-white/20 transition-all">
+                    <Navigation size={18} />
                   </div>
-              </button>
+                  اكتشف الأماكن القريبة مني
+                </button>
+              </motion.div>
 
-              <button 
-                onClick={handleSurpriseMe}
-                className="group px-6 py-4 bg-white border-2 border-emerald-100 rounded-3xl hover:border-emerald-400 hover:shadow-xl transition-all flex items-center gap-3"
+              <motion.div 
+                animate={{ y: [0, 10, 0] }}
+                transition={{ repeat: Infinity, duration: 2 }}
+                className="absolute bottom-10 left-1/2 -translate-x-1/2 text-white/30"
               >
-                <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-500 group-hover:rotate-12 transition-transform">
-                  <Dices size={20} />
+                <div className="w-6 h-10 border-2 border-current rounded-full flex justify-center p-1">
+                  <div className="w-1 h-2 bg-current rounded-full" />
                 </div>
-                <div className="text-right">
-                  <span className="block text-sm font-black text-stone-800">اختار لي على ذوقك!</span>
-                  <span className="block text-[9px] text-stone-400 font-bold uppercase">ضربة حظ مميزة</span>
-                </div>
-              </button>
+              </motion.div>
+            </section>
 
-              <button 
-                onClick={handleChallengeMe}
-                className="group px-6 py-4 bg-white border-2 border-rose-100 rounded-3xl hover:border-rose-400 hover:shadow-xl transition-all flex items-center gap-3"
-              >
-                <div className="w-10 h-10 bg-rose-50 rounded-xl flex items-center justify-center text-rose-500 group-hover:rotate-12 transition-transform">
-                  <Trophy size={20} />
-                </div>
-                <div className="text-right">
-                  <span className="block text-sm font-black text-stone-800">تحداني!</span>
-                  <span className="block text-[9px] text-stone-400 font-bold uppercase">خيار غير متوقع</span>
-                </div>
-              </button>
-            </div>
-
-            <AnimatePresence>
-                {showMoodSection && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: -20, scale: 0.95 }} 
-                      animate={{ opacity: 1, y: 0, scale: 1 }} 
-                      exit={{ opacity: 0, y: -20, scale: 0.95 }} 
-                      className="mt-8 bg-white rounded-[2.5rem] p-8 border border-stone-100 shadow-2xl max-w-6xl mx-auto relative overflow-hidden"
-                    >
                         <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                           <BrainCircuit size={120} />
                         </div>
@@ -1679,15 +1784,13 @@ export default function App() {
                                             <Info size={14} />
                                             شوف الصور والتفاصيل
                                           </button>
-                                          <a 
-                                            href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${aiTargetPlaceId}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                          <button 
+                                            onClick={() => navigateToPlace(aiTargetPlaceId)}
                                             className="px-6 py-2.5 bg-stone-900 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-orange-500/20 hover:bg-black transition-all flex items-center gap-2"
                                           >
                                             <Navigation size={14} className="text-white" />
                                             ودني للمكان! (غوغل ماب)
-                                          </a>
+                                          </button>
                                        </div>
                                     )}
                                   </div>
@@ -1697,10 +1800,8 @@ export default function App() {
                           </AnimatePresence>
                         </div>
                     </motion.div>
-                )}
-            </AnimatePresence>
-        </section>
-
+        ) : (
+          <>
         <AnimatePresence>
           {isLocationPromptVisible && (
             <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -1892,10 +1993,10 @@ export default function App() {
                 <Heart size={14} fill={showFavoritesOnly ? "white" : "none"} />
                 مفضلاتي
               </button>
+            </div>
           </div>
-        </div>
 
-        {viewMode === 'coverage' ? (
+          {viewMode === 'coverage' ? (
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2072,33 +2173,176 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  
-                  <div className="absolute -top-3 -left-3 bg-white dark:bg-stone-900 p-2 rounded-xl shadow-lg transform rotate-12 border border-stone-100 dark:border-stone-800">
-                    <Sparkles size={16} className="text-orange-500" />
-                  </div>
-                </div>
-
-                <div className="bg-white dark:bg-stone-900 p-8 rounded-[3rem] border border-stone-100 dark:border-stone-800">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-900/40 rounded-xl flex items-center justify-center text-indigo-600 shadow-sm">
-                      <Trophy size={20} />
-                    </div>
-                    <h3 className="text-sm font-black text-stone-900 dark:text-stone-100 uppercase tracking-widest">إحصائيات المدونة</h3>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl">
-                      <span className="text-[10px] font-bold text-stone-400">إجمالي التقارير</span>
-                      <span className="text-xl font-black text-stone-900 dark:text-white">{coveragePosts.length}</span>
-                    </div>
-                    <div className="flex justify-between items-center p-4 bg-stone-50 dark:bg-stone-800/50 rounded-2xl">
-                      <span className="text-[10px] font-bold text-stone-400">ملفات مرفوعة</span>
-                      <span className="text-xl font-black text-stone-900 dark:text-white">
-                        {coveragePosts.reduce((acc, curr) => acc + curr.media.length, 0)}
-                      </span>
-                    </div>
-                  </div>
                 </div>
               </div>
+            </div>
+          </motion.div>
+        ) : viewMode === 'menus' ? (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12" dir="rtl">
+            <div className="bg-white dark:bg-stone-900 rounded-[3rem] p-8 md:p-12 border border-stone-100 dark:border-stone-800 shadow-xl relative overflow-hidden">
+                                <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
+                                  <span>الأجواء</span>
+                                  <Sparkle size={14} />
+                                </h4>
+                                <div className="flex flex-wrap gap-2 justify-end">
+                                  {['romantic','friends','family','fast'].map(m => (
+                                    <button key={m} onClick={() => toggleMoodPref('vibe', m)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${moodPrefs.vibe.includes(m) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
+                                      {m === 'romantic' && <Heart size={12} />}
+                                      {m === 'friends' && <Users size={12} />}
+                                      {m === 'family' && <Baby size={12} />}
+                                      {m === 'fast' && <Zap size={12} />}
+                                      {m === 'romantic' ? 'رومانسي' : m === 'friends' ? 'خويا' : m === 'family' ? 'عائلي' : 'سريعة'}
+                                    </button>
+                                  ))}
+                                </div>
+                             </div>
+
+                             {/* Dietary */}
+                             <div>
+                                <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
+                                  <span>التفضيلات</span>
+                                  <Leaf size={14} />
+                                </h4>
+                                <div className="flex flex-wrap gap-2 justify-end">
+                                  {['healthy','traditional','modern','dessert'].map(m => (
+                                    <button key={m} onClick={() => toggleMoodPref('dietary', m)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${moodPrefs.dietary.includes(m) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
+                                      {m === 'healthy' ? 'صحي' : m === 'traditional' ? 'شعبي' : m === 'modern' ? 'مودرن' : 'حلويات'}
+                                    </button>
+                                  ))}
+                                </div>
+                             </div>
+
+                             {/* Price Range */}
+                             <div>
+                                <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
+                                  <span>السعر</span>
+                                  <DollarSign size={14} />
+                                </h4>
+                                <div className="flex flex-wrap gap-2 justify-end">
+                                  {[1,2,3,4].map(m => (
+                                    <button key={m} onClick={() => toggleMoodPref('price', m.toString())} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${moodPrefs.price.includes(m.toString()) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
+                                      {'$'.repeat(m)}
+                                    </button>
+                                  ))}
+                                </div>
+                             </div>
+
+                             {/* Result Button */}
+                             <div className="flex items-end justify-end">
+                                <button 
+                                  onClick={generateMoodRecommendation}
+                                  disabled={isAiLoading}
+                                  className="w-full py-4 bg-stone-900 text-white rounded-2xl font-black text-sm shadow-xl hover:bg-black transition-all active:scale-95 flex items-center justify-center gap-2"
+                                >
+                                  {isAiLoading ? <RotateCw className="animate-spin" size={18} /> : <Sparkles size={18} />}
+                                  هاتها يا أبو عبدالله!
+                                </button>
+                             </div>
+                          <AnimatePresence>
+                            {aiRecommendation && (
+                              <motion.div 
+                                initial={{ opacity: 0, height: 0 }} 
+                                animate={{ opacity: 1, height: 'auto' }} 
+                                exit={{ opacity: 0, height: 0 }}
+                                className="mt-8 pt-8 border-t border-stone-50"
+                              >
+                                <div className="flex flex-col sm:flex-row items-center gap-6 text-right">
+                                  <div className="w-16 h-16 bg-orange-500 rounded-3xl flex items-center justify-center text-white shrink-0 shadow-lg shadow-orange-500/20">
+                                    <Ghost size={32} />
+                                  </div>
+                                  <div className="text-right flex-1">
+                                    <p className="text-stone-700 text-sm leading-relaxed whitespace-pre-wrap font-medium mb-6">
+                                      {aiRecommendation}
+                                    </p>
+                                    
+                                    {aiTargetPlaceId && (
+                                       <div className="flex flex-wrap gap-2 justify-end">
+                                          <button 
+                                            onClick={() => handlePlaceSelect(aiTargetPlaceId)}
+                                            className="px-6 py-2.5 bg-stone-900 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-orange-500/20 hover:bg-black transition-all flex items-center gap-2"
+                                          >
+                                            <Info size={14} />
+                                            شوف الصور والتفاصيل
+                                          </button>
+                                          <button 
+                                            onClick={() => navigateToPlace(aiTargetPlaceId)}
+                                            className="px-6 py-2.5 bg-stone-900 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-orange-500/20 hover:bg-black transition-all flex items-center gap-2"
+                                          >
+                                            <Navigation size={14} className="text-white" />
+                                            ودني للمكان! (غوغل ماب)
+                                          </button>
+                                       </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+            <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+              {places
+                .filter(p => (p.types?.includes('restaurant') || p.types?.includes('cafe')))
+                .filter(p => !menuPriceLevels.length || (p.price_level !== undefined && menuPriceLevels.includes(p.price_level)))
+                .map((place) => (
+                  <motion.div 
+                    key={place.place_id}
+                    className="group bg-white dark:bg-stone-900 rounded-[2.5rem] border border-stone-100 dark:border-stone-800 overflow-hidden shadow-sm hover:shadow-2xl transition-all flex flex-col"
+                  >
+                    <div className="relative aspect-[4/5] overflow-hidden bg-stone-100 dark:bg-stone-950">
+                      {place.photos && place.photos.length > 0 ? (
+                        <div className="w-full h-full relative">
+                          <img 
+                            src={place.photos[0].getUrl({ maxWidth: 800, maxHeight: 1000 })} 
+                            className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110"
+                            alt={place.name}
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6">
+                             <button 
+                               onClick={() => getPlaceDetails(place.place_id!)}
+                               className="w-full py-3 bg-white text-black rounded-xl font-black text-xs shadow-xl active:scale-95 transition-all"
+                             >
+                                عرض قائمة الطعام
+                             </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-stone-300 gap-2">
+                           <ChefHat size={40} className="opacity-20" />
+                           <span className="text-[10px] font-bold">لا يوجد صور حالياً</span>
+                        </div>
+                      )}
+                      
+                      {/* Price Badge */}
+                      <div className="absolute top-4 right-4 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md px-3 py-1.5 rounded-full text-[9px] font-black text-stone-900 dark:text-white shadow-lg border border-white/50">
+                        {place.price_level === 0 ? 'مجاني' : place.price_level === 1 ? 'رخيص 💸' : place.price_level === 2 ? 'متوسط 💰' : place.price_level === 3 ? 'غالي 💎' : place.price_level === 4 ? 'فاخر ✨' : 'غير محدد'}
+                      </div>
+                    </div>
+
+                    <div className="p-6 text-right">
+                       <h3 className="text-sm font-black text-stone-900 dark:text-white mb-1 group-hover:text-orange-500 transition-colors truncate">{place.name}</h3>
+                       <div className="flex items-center justify-end gap-1 mb-3">
+                          <span className="text-[10px] font-bold text-stone-400 truncate max-w-[150px]">{place.formatted_address?.split(',')[0]}</span>
+                          <MapPin size={10} className="text-stone-300" />
+                       </div>
+                       
+                       <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1">
+                             <span className="text-xs font-black text-stone-900 dark:text-white">{place.rating}</span>
+                             <Star size={10} className="text-orange-400 fill-orange-400" />
+                          </div>
+                          {place.user_ratings_total && (
+                            <span className="text-[9px] font-bold text-stone-400">({place.user_ratings_total} تقييم)</span>
+                          )}
+                       </div>
+                    </div>
+                  </motion.div>
+                ))}
+
+            {places.filter(p => (p.types?.includes('restaurant') || p.types?.includes('cafe'))).length === 0 && (
+              <div className="flex flex-col items-center justify-center py-32 bg-white dark:bg-stone-900 rounded-[3rem] border border-stone-100 dark:border-stone-800">
+                <RotateCw size={40} className="text-orange-500 animate-spin mb-4" />
+                <p className="text-stone-500 font-bold">جاري البحث عن أشهى قوائم الطعام...</p>
+              </div>
+            )}
             </div>
           </motion.div>
         ) : viewMode === 'map' ? (
@@ -2159,15 +2403,12 @@ export default function App() {
                                 {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
                               </span>
                               <div className="flex items-center gap-2">
-                                <a 
-                                  href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${place.place_id}&destination=${encodeURIComponent(place.name || '')}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); navigateToPlace(place.place_id!, place.name); }}
                                   className="w-8 h-8 flex items-center justify-center bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white transition-all ring-4 ring-transparent hover:ring-blue-500/10"
                                 >
                                   <Navigation size={14} />
-                                </a>
+                                </button>
                                 <div className="bg-stone-50 dark:bg-stone-800 group-hover:bg-orange-500 p-2 rounded-xl text-stone-400 dark:text-stone-600 group-hover:text-white transition-all"> 
                                   <ChevronRight size={16} className="rotate-180" /> 
                                 </div>
@@ -2189,7 +2430,9 @@ export default function App() {
               )}
           </section>
         )}
-      </main>
+      </>
+    )}
+  </main>
 
       <AnimatePresence>
         {showLuckPopup && luckyPlace && (
@@ -2257,12 +2500,12 @@ export default function App() {
                     
                     {selectedPlace.photos && selectedPlace.photos.length > 1 && (
                       <div className="absolute inset-x-0 bottom-6 flex justify-center gap-2 px-6">
-                        <div className="flex gap-2 bg-black/20 backdrop-blur-md p-1.5 rounded-full">
-                          {selectedPlace.photos.slice(0, 5).map((_, i) => (
+                        <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/30 backdrop-blur-md p-2 rounded-full max-w-[80%]">
+                          {selectedPlace.photos.map((_, i) => (
                             <button 
                               key={i}
                               onClick={(e) => { e.stopPropagation(); setActivePhotoIndex(i); }}
-                              className={`w-2 h-2 rounded-full transition-all ${i === activePhotoIndex ? 'bg-white w-4' : 'bg-white/40'}`}
+                              className={`w-1.5 h-1.5 rounded-full transition-all ${i === activePhotoIndex ? 'bg-white w-3 scale-125' : 'bg-white/40 hover:bg-white/60'}`}
                             />
                           ))}
                         </div>
@@ -2291,15 +2534,13 @@ export default function App() {
                 <div className="w-full sm:w-1/2 p-6 sm:p-10 overflow-y-auto no-scrollbar text-right">
                     <div className="mb-6">
                       <h2 className="text-3xl font-black text-stone-900 dark:text-white mb-2">{selectedPlace.name}</h2>
-                      <a 
-                        href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${selectedPlace.place_id}&destination=${encodeURIComponent(selectedPlace.name || '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center justify-end gap-2 text-stone-500 dark:text-stone-400 hover:text-orange-500 transition-colors group/addr"
+                      <button 
+                        onClick={() => navigateToPlace(selectedPlace.place_id!, selectedPlace.name)}
+                        className="flex items-center justify-end gap-2 text-stone-500 dark:text-stone-400 hover:text-orange-500 transition-colors group/addr w-full text-right"
                       >
                         <p className="text-sm font-medium group-hover/addr:underline decoration-2 underline-offset-4">{selectedPlace.formatted_address}</p>
                         <MapPin size={16} className="flex-shrink-0 text-stone-300 dark:text-stone-600 group-hover/addr:text-orange-400" />
-                      </a>
+                      </button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4 mb-8">
@@ -2317,15 +2558,13 @@ export default function App() {
                     </div>
 
                     <div className="flex flex-col gap-3 mb-10">
-                      <a 
-                        href={`https://www.google.com/maps/dir/?api=1&destination_place_id=${selectedPlace.place_id}&destination=${encodeURIComponent(selectedPlace.name || '')}`}
-                        target="_blank" 
-                        rel="noopener noreferrer" 
+                      <button 
+                        onClick={() => navigateToPlace(selectedPlace.place_id!, selectedPlace.name)}
                         className="w-full py-5 bg-orange-500 text-white rounded-[1.5rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-all text-sm shadow-lg shadow-orange-500/20"
                       >
                         <Navigation size={20} />
                         اتجه للمكان (خرائط غوغل)
-                      </a>
+                      </button>
                       
                       <div className="grid grid-cols-2 gap-3">
                         {selectedPlace.formatted_phone_number && (
@@ -2456,10 +2695,14 @@ export default function App() {
       <nav className="md:hidden fixed bottom-6 left-4 right-4 z-[100] bg-white/80 backdrop-blur-2xl border border-white/40 shadow-[0_20px_50px_rgba(0,0,0,0.15)] rounded-[2.5rem] p-2 flex items-center justify-between gap-1 overflow-hidden">
         <button 
           onClick={() => { 
-            window.scrollTo({ top: 0, behavior: 'smooth' }); 
+            if (viewMode === 'landing') {
+              window.scrollTo({ top: 0, behavior: 'smooth' }); 
+            } else {
+              setViewMode('landing');
+            }
             setShowMoodSection(false); 
           }}
-          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${viewMode === 'grid' && !showMoodSection && !showFavoritesOnly ? 'bg-orange-500 text-white shadow-lg' : 'text-stone-400'}`}
+          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${viewMode === 'landing' && !showMoodSection && !showFavoritesOnly ? 'bg-orange-500 text-white shadow-lg' : 'text-stone-400'}`}
         >
           <Home size={20} />
           <span className="text-[9px] font-black uppercase tracking-tighter">الرئيسية</span>
@@ -2497,8 +2740,30 @@ export default function App() {
           <span className="text-[9px] font-black uppercase tracking-tighter">اختار لي</span>
         </button>
 
-        <button 
-          onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')}
+        {showInstallButton && (
+          <button 
+            onClick={handleInstallClick}
+            className="flex-1 flex flex-col items-center gap-1 py-3 text-white bg-orange-600 rounded-[2rem] transition-all animate-pulse"
+          >
+            <Download size={20} />
+            <span className="text-[9px] font-black uppercase tracking-tighter">تثبيت</span>
+          </button>
+        )}
+
+      <button 
+        onClick={() => {
+          setViewMode('menus');
+          setShowMoodSection(false);
+          setShowFavoritesOnly(false);
+        }}
+        className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${viewMode === 'menus' ? 'bg-orange-500 text-white shadow-lg' : 'text-stone-400'}`}
+      >
+        <ChefHat size={20} />
+        <span className="text-[9px] font-black uppercase tracking-tighter">المنيو</span>
+      </button>
+
+      <button 
+        onClick={() => setViewMode(viewMode === 'grid' ? 'map' : 'grid')}
           className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${viewMode === 'map' ? 'bg-blue-500 text-white shadow-lg' : 'text-stone-400'}`}
         >
           <MapViewIcon size={20} />
