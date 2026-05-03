@@ -1033,17 +1033,23 @@ export default function App() {
       googleRef.current = google;
       setIsMapsLoaded(true);
       setApiKeyError(false);
+      setError(null);
     }).catch(e => {
       console.error('Error loading Google Maps:', e);
-      // Detailed error message for common issues
-      if (e.message?.includes('InvalidKeyMapError')) {
-        setError('خطأ في مفتاح الخرائط: المفتاح المستخدم غير صالح أو لم يتم تفعيل Maps JavaScript API له.');
-      } else if (e.message?.includes('RefererNotAllowedMapError')) {
-        setError('خطأ في الخرائط: هذا النطاق (Domain) غير مسموح له باستخدام هذا المفتاح.');
-      } else {
-        setError('فشل تحميل خرائط غوغل. تأكد من تفعيل "Maps JavaScript API" و "Places API" في Google Cloud Console.');
-      }
       setApiKeyError(true);
+      const isInvalidKey = e.message?.includes('InvalidKeyMapError');
+      const isRefererError = e.message?.includes('RefererNotAllowedMapError');
+      const isNotActivated = e.message?.includes('ApiNotActivatedMapError');
+      
+      if (isInvalidKey) {
+        setError('خطأ: مفتاح الخرائط (API Key) غير صالح. يرجى تزويد مفتاح جديد في الإعدادات.');
+      } else if (isRefererError) {
+        setError('خطأ: هذا النطاق غير مصرح له باستخدام المفتاح. يرجى مراجعة قيود النطاق في Google Cloud.');
+      } else if (isNotActivated) {
+        setError('خطأ: خدمة "Maps JavaScript API" غير مفعلة في مشروعك على Google Cloud.');
+      } else {
+        setError('تعذر تحميل خرائط Google. قد يكون السبب مشكلة في الفوترة (Billing) أو في صلاحيات المفتاح.');
+      }
     });
   }, []);
 
@@ -1376,28 +1382,34 @@ export default function App() {
       });
 
       // Merge results with firestore places
-      const topResults = results.slice(0, 8).map(p => ({
-        name: p.name,
-        rating: p.rating,
-        reviews: p.user_ratings_total,
-        vicinity: p.vicinity || p.formatted_address,
+      const topResults = (results || []).slice(0, 8).map(p => ({
+        name: p.name || 'مكان غير معروف',
+        rating: p.rating || 0,
+        reviews: p.user_ratings_total || 0,
+        vicinity: p.vicinity || p.formatted_address || 'العنوان غير متاح',
         id: p.place_id,
-        distance: p.geometry?.location ? 
+        distance: (p.geometry?.location && userLocation) ? 
           calculateDistance(userLocation.lat, userLocation.lng, p.geometry.location.lat(), p.geometry.location.lng()).toFixed(1) : '?'
       }));
 
       // Add firestore places to top recommendations if they match mood
-      const relevantFirestore = firestorePlacesRef.current.slice(0, 5).map(p => ({
-        name: p.name,
-        rating: p.rating,
-        reviews: p.user_ratings_total,
-        vicinity: p.vicinity,
+      const relevantFirestore = (firestorePlacesRef.current || []).slice(0, 5).map(p => ({
+        name: p.name || 'مكان خاص',
+        rating: p.rating || 5,
+        reviews: p.user_ratings_total || 100,
+        vicinity: p.vicinity || 'المنطقة الشرقية',
         id: p.place_id,
-        distance: p.geometry?.location ? 
+        distance: (p.geometry?.location && userLocation) ? 
           calculateDistance(userLocation.lat, userLocation.lng, (p.geometry.location as any).lat(), (p.geometry.location as any).lng()).toFixed(1) : '?'
       }));
 
       const finalContext = [...topResults, ...relevantFirestore];
+      
+      if (finalContext.length === 0) {
+        setAiRecommendation("يا غالي المكان اللي تدوره ماله أثر حالياً حولك، وش رايك تجرب تغير اختياراتك أو تبعد شوي؟");
+        setIsAiLoading(false);
+        return;
+      }
 
       const userName = user?.displayName?.split(' ')?.[0] || 'أبو عبدالله';
       const isMenuMode = viewMode === 'menus';
