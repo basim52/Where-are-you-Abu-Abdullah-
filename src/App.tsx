@@ -520,9 +520,23 @@ export default function App() {
   }, []);
 
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [firestoreEnabled, setFirestoreEnabled] = useState(true);
 
-  // Optimized fetch for coverage posts (Fetch once instead of real-time)
+  // Optimized fetch for coverage posts with caching
   const fetchCoveragePosts = async () => {
+    if (!firestoreEnabled) return;
+    
+    // Load from cache first
+    const cached = localStorage.getItem('cache_coverage_posts');
+    if (cached) {
+      try {
+        setCoveragePosts(JSON.parse(cached));
+        setCoveragePostsLoading(false);
+      } catch (e) {
+        console.warn("Failed to parse cached coverage posts");
+      }
+    }
+
     try {
       const q = query(
         collection(db, 'coveragePosts'),
@@ -539,11 +553,10 @@ export default function App() {
         const mediaRef = collection(db, 'coveragePosts', docSnap.id, 'media');
         const mediaSnap = await getDocs(query(mediaRef, orderBy('order', 'asc')));
         
-        const mediaItems = await Promise.all(mediaSnap.docs.map(async (mDoc) => {
+        const mediaItems = mediaSnap.docs.map((mDoc) => {
           const mData = mDoc.data();
-          const fullData = await fetchFullMedia(docSnap.id, { ...mData, id: mDoc.id });
-          return { type: mData.type, url: fullData };
-        }));
+          return { type: mData.type, url: mData.url }; // Simple media mapping to avoid extra calls
+        });
 
         return {
           id: docSnap.id,
@@ -555,9 +568,12 @@ export default function App() {
 
       const results = await Promise.all(postsWithMediaPromises);
       setCoveragePosts(results);
+      localStorage.setItem('cache_coverage_posts', JSON.stringify(results));
     } catch (error: any) {
-      if (error.message.includes('resource-exhausted') || error.message.includes('Quota exceeded')) {
+      const errorStr = error.message || String(error);
+      if (errorStr.includes('resource-exhausted') || errorStr.includes('Quota exceeded')) {
         setIsQuotaExceeded(true);
+        setFirestoreEnabled(false);
       } else {
         handleFirestoreError(error, OperationType.LIST, 'coveragePosts');
       }
@@ -616,8 +632,15 @@ export default function App() {
 
   // Fetch all ratings once (Optimized to avoid constant stream)
   const fetchAllRatings = async () => {
+    if (!firestoreEnabled) return;
     try {
-      const q = query(collection(db, 'reviews'), limit(500)); // Limit to prevent massive reads
+      // Local cache for ratings
+      const cached = localStorage.getItem('cache_ratings_map');
+      if (cached) {
+        setInternalRatingsMap(JSON.parse(cached));
+      }
+
+      const q = query(collection(db, 'reviews'), limit(300)); 
       const snapshot = await getDocs(q);
       const allReviews = snapshot.docs.map(doc => doc.data() as InternalReview);
       const newMap: Record<string, { rating: number, count: number }> = {};
@@ -635,8 +658,15 @@ export default function App() {
       });
 
       setInternalRatingsMap(newMap);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'reviews');
+      localStorage.setItem('cache_ratings_map', JSON.stringify(newMap));
+    } catch (error: any) {
+      const errorStr = error.message || String(error);
+      if (errorStr.includes('resource-exhausted') || errorStr.includes('Quota exceeded')) {
+        setIsQuotaExceeded(true);
+        setFirestoreEnabled(false);
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'reviews');
+      }
     }
   };
 
@@ -1305,10 +1335,17 @@ export default function App() {
 
   const toggleMoodPref = (category: keyof typeof moodPrefs, value: string) => {
     setMoodPrefs(prev => {
-      const current = prev[category] as string[];
+      const current = (prev[category] || []) as string[];
       if (current.includes(value)) return { ...prev, [category]: current.filter(v => v !== value) };
       return { ...prev, [category]: [...current, value] };
     });
+  };
+
+  const retryFirestore = () => {
+    setFirestoreEnabled(true);
+    setIsQuotaExceeded(false);
+    fetchCoveragePosts();
+    fetchAllRatings();
   };
 
   const generateMoodRecommendation = async () => {
@@ -1578,18 +1615,25 @@ export default function App() {
       )}
 
       {isQuotaExceeded && (
-        <div className="bg-amber-500 text-white p-4 sticky top-20 z-[100] shadow-2xl">
-          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+        <div className="bg-orange-600 text-white p-4 sticky top-20 z-[100] shadow-2xl">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
              <div className="flex items-center gap-3">
-               <AlertTriangle size={24} className="animate-pulse" />
-               <div>
-                  <p className="font-black text-sm">يا غالي، غوغل تقول "يكفينا قراءة لليوم"!</p>
-                  <p className="text-[10px] font-bold opacity-90">وصلنا للحد الأقصى للاستخدام المجاني (Quota Exceeded). بعض الميزات مثل التقييمات والتغطيات الجديدة قد لا تظهر الآن، وبترجع بكرة إن شاء الله.</p>
+               <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                 <AlertTriangle size={20} className="animate-bounce" />
+               </div>
+               <div className="text-right">
+                  <p className="font-black text-sm">يا هلا يا أبو عبدالله، قوقل تقول "ارتاح شوي" اليوم!</p>
+                  <p className="text-[10px] font-bold opacity-90">وصلنا للحد الأقصى للاستخدام المجاني (Quota). بعض البيانات قديمة من الذاكرة، وبترجع تتحدث بكرة بإذن الله.</p>
                </div>
              </div>
-             <button onClick={() => setIsQuotaExceeded(false)} className="bg-white/20 hover:bg-white/30 p-2 rounded-xl transition-all">
-               <X size={18} />
-             </button>
+             <div className="flex gap-2">
+               <button onClick={retryFirestore} className="px-4 py-2 bg-white text-orange-600 rounded-xl text-[10px] font-black hover:bg-orange-50 transition-all">
+                 جرب الحين
+               </button>
+               <button onClick={() => setIsQuotaExceeded(false)} className="bg-white/10 hover:bg-white/20 p-2 rounded-xl transition-all">
+                 <X size={16} />
+               </button>
+             </div>
           </div>
         </div>
       )}
