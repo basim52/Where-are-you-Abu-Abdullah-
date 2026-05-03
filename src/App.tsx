@@ -73,7 +73,9 @@ import {
   Share2,
   ChevronLeft,
   Shield,
-  Briefcase
+  Briefcase,
+  AlertTriangle,
+  Coins
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
@@ -92,7 +94,8 @@ import {
   serverTimestamp, 
   orderBy,
   getDocs,
-  Timestamp
+  Timestamp,
+  limit
 } from 'firebase/firestore';
 // AI calls moved to server-side
 
@@ -300,18 +303,6 @@ export default function App() {
     return () => unsubscribe();
   }, [isAdmin]);
 
-  // Sync Ratings from Firestore
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'ratings'), (snapshot) => {
-      const ratings: Record<string, { rating: number, count: number }> = {};
-      snapshot.docs.forEach(doc => {
-        ratings[doc.id] = doc.data() as { rating: number, count: number };
-      });
-      setInternalRatingsMap(ratings);
-    });
-    return () => unsubscribe();
-  }, []);
-  
   const [openNowOnly, setOpenNowOnly] = useState<boolean>(false);
   const [priceFilter, setPriceFilter] = useState<number | null>(null);
   const [searchRadius, setSearchRadius] = useState<number>(5000);
@@ -528,20 +519,23 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Listen for coverage posts
-  useEffect(() => {
-    const q = query(
-      collection(db, 'coveragePosts'),
-      orderBy('createdAt', 'desc')
-    );
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
 
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
+  // Optimized fetch for coverage posts (Fetch once instead of real-time)
+  const fetchCoveragePosts = async () => {
+    try {
+      const q = query(
+        collection(db, 'coveragePosts'),
+        orderBy('createdAt', 'desc'),
+        limit(20)
+      );
+
+      const snapshot = await getDocs(q);
       const postsWithMediaPromises = snapshot.docs.map(async (docSnap) => {
         const data = docSnap.data();
         const createdAt = data.createdAt as Timestamp;
         const dateStr = createdAt ? new Date(createdAt.toMillis()).toLocaleDateString('ar-SA', { day: 'numeric', month: 'long' }) : 'الآن';
         
-        // Fetch sub-collection media
         const mediaRef = collection(db, 'coveragePosts', docSnap.id, 'media');
         const mediaSnap = await getDocs(query(mediaRef, orderBy('order', 'asc')));
         
@@ -561,13 +555,19 @@ export default function App() {
 
       const results = await Promise.all(postsWithMediaPromises);
       setCoveragePosts(results);
+    } catch (error: any) {
+      if (error.message.includes('resource-exhausted') || error.message.includes('Quota exceeded')) {
+        setIsQuotaExceeded(true);
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'coveragePosts');
+      }
+    } finally {
       setCoveragePostsLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'coveragePosts');
-      setCoveragePostsLoading(false);
-    });
+    }
+  };
 
-    return () => unsubscribe();
+  useEffect(() => {
+    fetchCoveragePosts();
   }, []);
 
   // Listen for app settings
@@ -614,10 +614,11 @@ export default function App() {
     return () => unsubscribe();
   }, [selectedPlace?.place_id]);
 
-  // Aggregated ratings logic
-  useEffect(() => {
-    const q = query(collection(db, 'reviews'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+  // Fetch all ratings once (Optimized to avoid constant stream)
+  const fetchAllRatings = async () => {
+    try {
+      const q = query(collection(db, 'reviews'), limit(500)); // Limit to prevent massive reads
+      const snapshot = await getDocs(q);
       const allReviews = snapshot.docs.map(doc => doc.data() as InternalReview);
       const newMap: Record<string, { rating: number, count: number }> = {};
       
@@ -634,11 +635,13 @@ export default function App() {
       });
 
       setInternalRatingsMap(newMap);
-    }, (error) => {
+    } catch (error) {
       handleFirestoreError(error, OperationType.LIST, 'reviews');
-    });
+    }
+  };
 
-    return () => unsubscribe();
+  useEffect(() => {
+    fetchAllRatings();
   }, []);
 
   // Notification / Reminder Logic
@@ -677,7 +680,8 @@ export default function App() {
     };
 
     checkReminders();
-    const interval = setInterval(checkReminders, 60000);
+    // Reduced frequency: only check every 10 minutes instead of every minute
+    const interval = setInterval(checkReminders, 600000);
     return () => clearInterval(interval);
   }, [user]);
 
@@ -1062,7 +1066,8 @@ export default function App() {
     }
 
     setLoading(true);
-    setPlaces([]);
+    // Don't fully clear if we're just expanding or filtering, but for a fresh search we might want to
+    if (!isFallback) setPlaces([]);
     setError(null);
 
     if (!placesServiceRef.current) {
@@ -1080,14 +1085,14 @@ export default function App() {
 
         // Merge with existing Firestore places
         setPlaces(prev => {
-          const merged = [...(sortedResults as PlaceDetail[])];
-          prev.forEach(p => {
-            const pid = p.place_id || p.id;
-            if (pid && !merged.find(m => (m.place_id || m.id) === pid)) {
-              merged.push(p);
+          const merged = [...prev];
+          sortedResults.forEach(p => {
+            const pid = p.place_id || (p as any).id;
+            if (pid && !merged.find(m => (m.place_id || (m as any).id) === pid)) {
+              merged.push(p as PlaceDetail);
             }
           });
-          return merged;
+          return merged.sort((a, b) => (a.distance || 0) - (b.distance || 0));
         });
         setLoading(false);
       } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS || !results || results.length === 0) {
@@ -1095,9 +1100,10 @@ export default function App() {
           // Automatic expansion (Fallback)
           findNearby(query, radius + 5000, true);
         } else {
-          // DO NOT clear places here, keep Firestore places
-          setError(isFallback ? 'دورت حولك حتى 15 كيلو وما لقيت خيارات تبيض الوجه، جرب تبحث عن شي ثاني؟' : 'لم يتم العثور على نتائج.');
           setLoading(false);
+          if (places.length === 0) {
+            setError(isFallback ? 'دورت حولك حتى 20 كيلو وما لقيت خيارات تبيض الوجه، جرب تبحث عن شي ثاني؟' : 'لم يتم العثور على نتائج.');
+          }
         }
       } else {
         setError('حدث خطأ أثناء البحث.');
@@ -1113,14 +1119,23 @@ export default function App() {
     if (query) {
       placesServiceRef.current?.textSearch({ ...searchParams, query }, handleResults);
     } else {
-      const type = (viewMode === 'menus' && filter === 'all') ? 'restaurant' : (filter === 'all' ? 'restaurant' : filter);
-      const keyword = (viewMode === 'menus' && filter === 'all') ? 'restaurant cafe menu' : (filter === 'all' ? 'restaurant cafe' : undefined);
-      
-      placesServiceRef.current?.nearbySearch({ 
-        ...searchParams, 
-        type, 
-        keyword
-      }, handleResults);
+      // Improved logic for Menu mode: Search for both restaurants and cafes
+      if (viewMode === 'menus') {
+        // Use keyword for broader matching of both types
+        placesServiceRef.current?.nearbySearch({ 
+          ...searchParams, 
+          keyword: 'restaurant cafeمطعم مقهى كوفي فطور عشاء' 
+        }, handleResults);
+      } else {
+        const type = (filter === 'all' ? 'restaurant' : filter);
+        const keyword = (filter === 'all' ? 'restaurant cafe' : undefined);
+        
+        placesServiceRef.current?.nearbySearch({ 
+          ...searchParams, 
+          type, 
+          keyword
+        }, handleResults);
+      }
     }
   }, [filter, isMapsLoaded, searchRadius, userLocation, viewMode]);
 
@@ -1348,16 +1363,18 @@ export default function App() {
       const finalContext = [...topResults, ...relevantFirestore];
 
       const userName = user?.displayName?.split(' ')?.[0] || 'أبو عبدالله';
+      const isMenuMode = viewMode === 'menus';
       const prompt = `أنت مساعد خبير ومستشار برتبة "خوي" في المطاعم والمقاهي في المنطقة الشرقية (الدمام، سيهات، الخبر) والبحرين. 
       اسم المستخدم: ${userName}. 
+      الوضع الحالي: ${isMenuMode ? 'استكشاف المنيو وقوائم الطعام' : 'استكشاف عام'}.
       مزاج المستخدم الحالي: ${JSON.stringify(moodPrefs)}. 
       الأماكن الحقيقية المتاحة حالياً حول المستخدم (Open Now): ${JSON.stringify(finalContext)}.
       
       المطلوب منك:
       1. اختيار "المكان الفائز" من القائمة بناءً على توافق المزاج (مثلاً إذا اختار رومانسي تجنب الأماكن المزدحمة).
-      2. إذا كانت القائمة فارغة، اقترح أفضل مكان تعرفه في المنطقة يناسب الاختيارات.
-      3. كن "أبو عبدالله" الحقيقي: استخدم فزعات، نصائح أخوية، وتحذيرات ودودة (مثل: "الزحمة هناك الحين قوية بس تستاهل الانتظار").
-      4. إذا كان الفلتر "كشتة"، ركز على مطاعم تغليفها بطل أو قريبة من البحر.
+      2. إذا كنت في وضع "المنيو"، ركز على ذكر أصناف طعام مشهورة بهذا المكان أو طبق "أبو عبدالله" المفضل هناك.
+      3. إذا كانت القائمة فارغة، اقترح أفضل مكان تعرفه في المنطقة يناسب الاختيارات.
+      4. كن "أبو عبدالله" الحقيقي: استخدم فزعات، نصائح أخوية، وتحذيرات ودودة (مثل: "الزحمة هناك الحين قوية بس تستاهل الانتظار").
       5. لا تذكر قائمة طويلة، ركز على واحد فقط وابهر المستخدم بوصفك.
       6. أنهِ ردك بذكر ID المكان المختار في سطر منفصل تماماً بصيغة "ID: [placeId]".`;
 
@@ -1560,6 +1577,23 @@ export default function App() {
         </div>
       )}
 
+      {isQuotaExceeded && (
+        <div className="bg-amber-500 text-white p-4 sticky top-20 z-[100] shadow-2xl">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+             <div className="flex items-center gap-3">
+               <AlertTriangle size={24} className="animate-pulse" />
+               <div>
+                  <p className="font-black text-sm">يا غالي، غوغل تقول "يكفينا قراءة لليوم"!</p>
+                  <p className="text-[10px] font-bold opacity-90">وصلنا للحد الأقصى للاستخدام المجاني (Quota Exceeded). بعض الميزات مثل التقييمات والتغطيات الجديدة قد لا تظهر الآن، وبترجع بكرة إن شاء الله.</p>
+               </div>
+             </div>
+             <button onClick={() => setIsQuotaExceeded(false)} className="bg-white/20 hover:bg-white/30 p-2 rounded-xl transition-all">
+               <X size={18} />
+             </button>
+          </div>
+        </div>
+      )}
+
       <main className={`${viewMode === 'landing' ? '' : 'max-w-7xl mx-auto px-4 py-10 sm:py-16 lg:py-20'}`}>
         {viewMode === 'landing' ? (
           <motion.div 
@@ -1686,31 +1720,65 @@ export default function App() {
             </section>
 
             {/* Smart Assistant Entry */}
-            <section className="py-16 px-6 flex flex-col items-center gap-6 relative z-10" id="mood-section">
-               <motion.button 
-                  initial={{ scale: 0.9, opacity: 0 }}
-                  whileInView={{ scale: 1, opacity: 1 }}
-                  onClick={() => {
-                    if (!showMoodSection) {
-                      setShowMoodSection(true);
-                    } else {
-                      generateMoodRecommendation();
-                    }
-                  }}
-                  className={`w-32 h-32 rounded-full flex flex-col items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.2)] border-4 transition-all group ${showMoodSection ? 'bg-orange-500 border-orange-200 text-white' : 'bg-stone-900 border-white text-white hover:bg-black'}`}
-               >
-                  <Sparkles size={44} className={`${showMoodSection ? 'animate-bounce' : 'text-orange-400 group-hover:animate-pulse'}`} />
-                  <span className="text-[11px] font-black mt-2 tracking-widest">{showMoodSection ? 'اسأل أبو عبدالله' : 'خويك الذكي'}</span>
-               </motion.button>
-               {!showMoodSection && (
-                  <motion.p 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: [0.4, 1, 0.4] }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                    className="text-stone-400 text-[10px] font-black uppercase tracking-[0.2em] text-center"
+            <section className="py-20 px-6 flex flex-col items-center gap-8 relative z-10" id="mood-section">
+               <div className="flex flex-col items-center gap-4">
+                  <motion.button 
+                     initial={{ scale: 0.9, opacity: 0 }}
+                     whileInView={{ scale: 1, opacity: 1 }}
+                     onClick={() => {
+                       if (!showMoodSection) {
+                         setShowMoodSection(true);
+                       } else {
+                         generateMoodRecommendation();
+                       }
+                     }}
+                     className={`w-36 h-36 rounded-full flex flex-col items-center justify-center shadow-[0_30px_60px_rgba(0,0,0,0.3)] border-4 transition-all group ${showMoodSection ? 'bg-orange-500 border-orange-200 text-white' : 'bg-stone-900 border-white text-white hover:bg-black hover:scale-105 active:scale-95'}`}
                   >
-                    انقر هنا لمساعدتك في تخير المكان <br /> المناسب "اسأل أبو عبدالله"
-                  </motion.p>
+                     <Sparkles size={48} className={`${showMoodSection ? 'animate-bounce' : 'text-orange-400 group-hover:scale-110 active:scale-90 transition-transform'}`} />
+                     <span className="text-[12px] font-black mt-3 tracking-widest leading-none">
+                       {showMoodSection ? 'اسأل أبو عبدالله' : 'خويك الذكي'}
+                     </span>
+                  </motion.button>
+                  {!showMoodSection && (
+                     <motion.div 
+                       initial={{ opacity: 0 }}
+                       animate={{ opacity: [0.4, 1, 0.4] }}
+                       transition={{ duration: 2, repeat: Infinity }}
+                       className="flex flex-col items-center gap-2"
+                     >
+                       <p className="text-stone-400 text-[11px] font-black uppercase tracking-[0.2em] text-center leading-tight">
+                         انقر هنا لمساعدتك في اختيار المكان <br /> المناسب "اسأل أبو عبدالله"
+                       </p>
+                       <ArrowRight size={16} className="text-stone-300 rotate-90 animate-bounce" />
+                     </motion.div>
+                  )}
+               </div>
+
+               {/* Auxiliary Smart Buttons */}
+               {!showMoodSection && (
+                 <div className="flex gap-4">
+                    <button 
+                      onClick={handleSurpriseMe}
+                      className="flex flex-col items-center gap-2 p-6 bg-white dark:bg-stone-900 rounded-[2.5rem] shadow-xl border border-stone-100 dark:border-stone-800 transition-all hover:scale-105 active:scale-95"
+                    >
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-500 flex items-center justify-center">
+                        <Dices size={24} />
+                      </div>
+                      <span className="text-[10px] font-black text-stone-600 dark:text-stone-400">اختار لي عشوائي!</span>
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setShowMoodSection(true);
+                        setTimeout(() => document.getElementById('mood-section')?.scrollIntoView({ behavior: 'smooth' }), 100);
+                      }}
+                      className="flex flex-col items-center gap-2 p-6 bg-white dark:bg-stone-900 rounded-[2.5rem] shadow-xl border border-stone-100 dark:border-stone-800 transition-all hover:scale-105 active:scale-95"
+                    >
+                      <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-900/20 text-orange-500 flex items-center justify-center">
+                        <Sparkles size={24} />
+                      </div>
+                      <span className="text-[10px] font-black text-stone-600 dark:text-stone-400">وفق مزاجك</span>
+                    </button>
+                 </div>
                )}
             </section>
 
@@ -1811,22 +1879,7 @@ export default function App() {
                            </div>
                         </div>
 
-                        <div className="fixed bottom-32 right-6 z-[200]">
-                          <button 
-                            onClick={generateMoodRecommendation} 
-                            disabled={isAiLoading} 
-                            className={`w-20 h-20 rounded-full flex flex-col items-center justify-center shadow-[0_30px_60px_rgba(0,0,0,0.5)] transition-all ${isAiLoading ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-stone-900 text-white hover:bg-black hover:scale-110 active:scale-95 border-4 border-orange-500'}`}
-                          >
-                            {isAiLoading ? (
-                              <RotateCw className="animate-spin" size={28} />
-                            ) : (
-                              <>
-                                <Sparkles size={32} className="text-orange-400 animate-pulse" />
-                                <span className="text-[8px] font-black mt-1 uppercase tracking-tighter">توصية</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
+                        {/* Hidden internally, now moved to a persistent FAB */}
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -2258,111 +2311,146 @@ export default function App() {
         ) : viewMode === 'menus' ? (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-12" dir="rtl">
             <div className="bg-white dark:bg-stone-900 rounded-[3rem] p-8 md:p-12 border border-stone-100 dark:border-stone-800 shadow-xl relative overflow-hidden">
-                                <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
-                                  <span>الأجواء</span>
-                                  <Sparkle size={14} />
-                                </h4>
-                                <div className="flex flex-wrap gap-2 justify-end">
-                                  {['romantic','friends','family','fast'].map(m => (
-                                    <button key={m} onClick={() => toggleMoodPref('vibe', m)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${moodPrefs.vibe.includes(m) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
-                                      {m === 'romantic' && <Heart size={12} />}
-                                      {m === 'friends' && <Users size={12} />}
-                                      {m === 'family' && <Baby size={12} />}
-                                      {m === 'fast' && <Zap size={12} />}
-                                      {m === 'romantic' ? 'رومانسي' : m === 'friends' ? 'خويا' : m === 'family' ? 'عائلي' : 'سريعة'}
-                                    </button>
-                                  ))}
-                                </div>
-                             </div>
+                <div className="flex flex-col md:flex-row items-center justify-between gap-8 mb-12">
+                   <div className="flex-1 text-center md:text-right">
+                      <h2 className="text-4xl font-black text-stone-900 dark:text-white mb-2">استكشف المنيو 🍽️</h2>
+                      <p className="text-stone-400 font-bold">أبو عبدالله جمع لك أفضل القوائم حولك</p>
+                   </div>
+                   <div className="flex flex-wrap gap-3 justify-center md:justify-end">
+                      <div className="flex items-center p-1 bg-stone-50 dark:bg-stone-800 rounded-2xl">
+                         {[1, 2, 3, 4].map(km => (
+                            <button 
+                              key={km} 
+                              onClick={() => setMenuDistance(km*5)}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${menuDistance === km*5 ? 'bg-orange-500 text-white shadow-md' : 'text-stone-400'}`}
+                            >
+                              {km*5} كم
+                            </button>
+                         ))}
+                      </div>
+                   </div>
+                </div>
 
-                             {/* Dietary */}
-                             <div>
-                                <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
-                                  <span>التفضيلات</span>
-                                  <Leaf size={14} />
-                                </h4>
-                                <div className="flex flex-wrap gap-2 justify-end">
-                                  {['healthy','traditional','modern','dessert'].map(m => (
-                                    <button key={m} onClick={() => toggleMoodPref('dietary', m)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${moodPrefs.dietary.includes(m) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
-                                      {m === 'healthy' ? 'صحي' : m === 'traditional' ? 'شعبي' : m === 'modern' ? 'مودرن' : 'حلويات'}
-                                    </button>
-                                  ))}
-                                </div>
-                             </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+                   {/* Mood Filter */}
+                   <div>
+                      <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
+                        <span>الأجواء</span>
+                        <Sparkle size={14} />
+                      </h4>
+                      <div className="flex flex-wrap gap-2 justify-end">
+                        {['romantic','friends','family','fast'].map(m => (
+                          <button key={m} onClick={() => toggleMoodPref('vibe', m)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${moodPrefs.vibe.includes(m) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
+                            {m === 'romantic' ? 'رايق' : m === 'friends' ? 'خويا' : m === 'family' ? 'عائلي' : 'سريعة'}
+                          </button>
+                        ))}
+                      </div>
+                   </div>
 
-                             {/* Price Range */}
-                             <div>
-                                <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
-                                  <span>السعر</span>
-                                  <DollarSign size={14} />
-                                </h4>
-                                <div className="flex flex-wrap gap-2 justify-end">
-                                  {[1,2,3,4].map(m => (
-                                    <button key={m} onClick={() => toggleMoodPref('price', m.toString())} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${moodPrefs.price.includes(m.toString()) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
-                                      {'$'.repeat(m)}
-                                    </button>
-                                  ))}
-                                </div>
-                             </div>
+                   {/* Cuisine Style */}
+                   <div>
+                      <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
+                        <span>تفضيلات الأكل</span>
+                        <ChefHat size={14} />
+                      </h4>
+                      <div className="flex flex-wrap gap-2 justify-end">
+                        {['traditional','healthy','oriental','dessert'].map(m => (
+                          <button key={m} onClick={() => toggleMoodPref('cuisine', m)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${moodPrefs.cuisine.includes(m) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}>
+                            {m === 'traditional' ? 'شعبي' : m === 'healthy' ? 'صحي' : m === 'oriental' ? 'شرقي' : 'حلويات'}
+                          </button>
+                        ))}
+                      </div>
+                   </div>
 
-                             {/* Result Button */}
-                             <div className="flex items-end justify-end">
+                   {/* Price Levels */}
+                   <div>
+                      <h4 className="font-black text-xs text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2 justify-end">
+                        <span>مستوى السعر</span>
+                        <Coins size={14} />
+                      </h4>
+                      <div className="flex flex-wrap gap-2 justify-end">
+                        {[1, 2, 3, 4].map(l => (
+                          <button 
+                            key={l} 
+                            onClick={() => {
+                              const newLevels = menuPriceLevels.includes(l) 
+                                ? menuPriceLevels.filter(x => x !== l)
+                                : [...menuPriceLevels, l];
+                              setMenuPriceLevels(newLevels);
+                            }} 
+                            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${menuPriceLevels.includes(l) ? 'bg-orange-500 text-white shadow-md' : 'bg-stone-50 text-stone-500'}`}
+                          >
+                            {l === 1 ? 'رخيص 💸' : l === 2 ? 'متوسط 💰' : l === 3 ? 'غالي 💎' : 'فاخر ✨'}
+                          </button>
+                        ))}
+                      </div>
+                   </div>
+
+                   {/* Search Action */}
+                   <div className="flex items-end justify-center md:justify-end">
+                      <button 
+                        onClick={generateMoodRecommendation}
+                        disabled={isAiLoading}
+                        className={`w-full py-5 rounded-2xl flex items-center justify-center gap-3 font-black text-sm transition-all shadow-xl ${isAiLoading ? 'bg-stone-100 text-stone-400' : 'bg-stone-900 text-white hover:bg-black active:scale-95'}`}
+                      >
+                        {isAiLoading ? <RotateCw className="animate-spin" size={20} /> : <Sparkles size={20} className="text-orange-400" />}
+                        خويك الذكي يقترح لك!
+                      </button>
+                   </div>
+                </div>
+
+                <AnimatePresence>
+                  {aiRecommendation && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }} 
+                      animate={{ opacity: 1, height: 'auto' }} 
+                      exit={{ opacity: 0, height: 0 }}
+                      className="mt-12 pt-12 border-t border-stone-50 dark:border-stone-800"
+                    >
+                      <div className="flex flex-col md:flex-row items-center gap-8 text-right bg-orange-50 dark:bg-orange-950/20 p-8 rounded-[2.5rem] border border-orange-100 dark:border-orange-900/30">
+                        <div className="w-20 h-20 bg-orange-500 rounded-[1.8rem] flex items-center justify-center text-white shrink-0 shadow-lg shadow-orange-500/20">
+                          <Logo className="w-full h-full p-2" />
+                        </div>
+                        <div className="text-right flex-1">
+                          <p className="text-stone-700 dark:text-stone-300 text-lg leading-relaxed whitespace-pre-wrap font-black mb-6">
+                            {aiRecommendation}
+                          </p>
+                          
+                          {aiTargetPlaceId && (
+                             <div className="flex flex-wrap gap-3 justify-end">
                                 <button 
-                                  onClick={generateMoodRecommendation}
-                                  disabled={isAiLoading}
-                                  className={`fixed bottom-24 right-6 w-16 h-16 rounded-full flex items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all z-[150] ${isAiLoading ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-stone-900 text-white hover:bg-black active:scale-110 border-4 border-white dark:border-stone-800'}`}
+                                  onClick={() => handlePlaceSelect(aiTargetPlaceId)}
+                                  className="px-8 py-4 bg-stone-900 text-white rounded-2xl text-xs font-black shadow-lg hover:bg-black transition-all flex items-center gap-2"
                                 >
-                                  {isAiLoading ? <RotateCw className="animate-spin" size={24} /> : <Sparkles size={28} className="text-orange-400 animate-pulse group-hover:scale-110 transition-transform" />}
+                                  <Info size={16} />
+                                  عرض المنيو والتفاصيل
+                                </button>
+                                <button 
+                                  onClick={() => navigateToPlace(aiTargetPlaceId)}
+                                  className="px-8 py-4 bg-white text-stone-900 rounded-2xl text-xs font-black shadow-lg border border-stone-100 hover:bg-stone-50 transition-all flex items-center gap-2"
+                                >
+                                  <Navigation size={16} className="text-emerald-500" />
+                                  ودني للمكان الحين!
                                 </button>
                              </div>
-                          <AnimatePresence>
-                            {aiRecommendation && (
-                              <motion.div 
-                                initial={{ opacity: 0, height: 0 }} 
-                                animate={{ opacity: 1, height: 'auto' }} 
-                                exit={{ opacity: 0, height: 0 }}
-                                className="mt-8 pt-8 border-t border-stone-50"
-                              >
-                                <div className="flex flex-col sm:flex-row items-center gap-6 text-right">
-                                  <div className="w-16 h-16 bg-orange-500 rounded-3xl flex items-center justify-center text-white shrink-0 shadow-lg shadow-orange-500/20">
-                                    <Ghost size={32} />
-                                  </div>
-                                  <div className="text-right flex-1">
-                                    <p className="text-stone-700 text-sm leading-relaxed whitespace-pre-wrap font-medium mb-6">
-                                      {aiRecommendation}
-                                    </p>
-                                    
-                                    {aiTargetPlaceId && (
-                                       <div className="flex flex-wrap gap-2 justify-end">
-                                          <button 
-                                            onClick={() => handlePlaceSelect(aiTargetPlaceId)}
-                                            className="px-6 py-2.5 bg-stone-900 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-orange-500/20 hover:bg-black transition-all flex items-center gap-2"
-                                          >
-                                            <Info size={14} />
-                                            شوف الصور والتفاصيل
-                                          </button>
-                                          <button 
-                                            onClick={() => navigateToPlace(aiTargetPlaceId)}
-                                            className="px-6 py-2.5 bg-stone-900 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-orange-500/20 hover:bg-black transition-all flex items-center gap-2"
-                                          >
-                                            <Navigation size={14} className="text-white" />
-                                            ودني للمكان! (غوغل ماب)
-                                          </button>
-                                       </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+            </div>
+
             <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
               {places
-                .filter(p => (p.types?.includes('restaurant') || p.types?.includes('cafe')))
+                .filter(p => (p.types?.includes('restaurant') || p.types?.includes('cafe') || p.types?.includes('food')))
                 .filter(p => !menuPriceLevels.length || (p.price_level !== undefined && menuPriceLevels.includes(p.price_level)))
                 .map((place) => (
                   <motion.div 
                     key={place.place_id}
-                    className="group bg-white dark:bg-stone-900 rounded-[2.5rem] border border-stone-100 dark:border-stone-800 overflow-hidden shadow-sm hover:shadow-2xl transition-all flex flex-col"
+                    layout
+                    whileHover={{ y: -10 }}
+                    className="group bg-white dark:bg-stone-900 rounded-[3rem] border border-stone-100 dark:border-stone-800 overflow-hidden shadow-sm hover:shadow-2xl transition-all flex flex-col"
                   >
                     <div className="relative aspect-[4/5] overflow-hidden bg-stone-100 dark:bg-stone-950">
                       {place.photos && place.photos.length > 0 ? (
@@ -2372,55 +2460,92 @@ export default function App() {
                             className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110"
                             alt={place.name}
                           />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6">
-                             <button 
-                               onClick={() => getPlaceDetails(place.place_id!)}
-                               className="w-full py-3 bg-white text-black rounded-xl font-black text-xs shadow-xl active:scale-95 transition-all"
-                             >
-                                عرض قائمة الطعام
-                             </button>
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-8">
+                             <div className="space-y-3">
+                                <button 
+                                  onClick={() => getPlaceDetails(place.place_id!)}
+                                  className="w-full py-4 bg-orange-500 text-white rounded-2xl font-black text-xs shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2"
+                                >
+                                   <Utensils size={14} />
+                                   تصفح المنيو
+                                </button>
+                                <button 
+                                  onClick={() => navigateToPlace(place.place_id!, place.name)}
+                                  className="w-full py-4 bg-white/20 backdrop-blur-md text-white border border-white/30 rounded-2xl font-black text-xs active:scale-95 transition-all flex items-center justify-center gap-2"
+                                >
+                                   <Navigation size={14} />
+                                   الخريطة
+                                </button>
+                             </div>
                           </div>
                         </div>
                       ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-stone-300 gap-2">
-                           <ChefHat size={40} className="opacity-20" />
-                           <span className="text-[10px] font-bold">لا يوجد صور حالياً</span>
+                        <div className="w-full h-full flex flex-col items-center justify-center text-stone-300 gap-4">
+                           <div className="w-20 h-20 rounded-3xl bg-white dark:bg-stone-800 flex items-center justify-center shadow-inner">
+                              <ChefHat size={32} className="opacity-20" />
+                           </div>
+                           <span className="text-xs font-black tracking-widest uppercase opacity-40">قريباً..</span>
                         </div>
                       )}
                       
+                      {/* Badge for Type */}
+                      <div className="absolute top-4 left-4 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md px-3 py-1.5 rounded-full text-[9px] font-black text-stone-900 dark:text-white shadow-lg border border-white/50 flex items-center gap-1.5">
+                         {place.types?.includes('cafe') ? (
+                           <><Coffee size={10} className="text-orange-500" /> مقهى</>
+                         ) : (
+                           <><Utensils size={10} className="text-orange-500" /> مطعم</>
+                         )}
+                      </div>
+
                       {/* Price Badge */}
-                      <div className="absolute top-4 right-4 bg-white/90 dark:bg-stone-900/90 backdrop-blur-md px-3 py-1.5 rounded-full text-[9px] font-black text-stone-900 dark:text-white shadow-lg border border-white/50">
+                      <div className="absolute top-4 right-4 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full text-[9px] font-black text-white shadow-lg border border-white/10">
                         {place.price_level === 0 ? 'مجاني' : place.price_level === 1 ? 'رخيص 💸' : place.price_level === 2 ? 'متوسط 💰' : place.price_level === 3 ? 'غالي 💎' : place.price_level === 4 ? 'فاخر ✨' : 'غير محدد'}
                       </div>
                     </div>
 
-                    <div className="p-6 text-right">
-                       <h3 className="text-sm font-black text-stone-900 dark:text-white mb-1 group-hover:text-orange-500 transition-colors truncate">{place.name}</h3>
-                       <div className="flex items-center justify-end gap-1 mb-3">
-                          <span className="text-[10px] font-bold text-stone-400 truncate max-w-[150px]">{place.formatted_address?.split(',')[0]}</span>
-                          <MapPin size={10} className="text-stone-300" />
+                    <div className="p-8 text-right bg-[#FDFCFB] dark:bg-stone-900">
+                       <div className="flex items-start justify-between gap-4 mb-2">
+                          <button className="text-stone-300 hover:text-rose-500 transition-colors" onClick={(e) => toggleFavorite(e, place.place_id!)}>
+                             <Heart size={18} fill={favorites.includes(place.place_id!) ? 'currentColor' : 'none'} className={favorites.includes(place.place_id!) ? 'text-rose-500' : ''} />
+                          </button>
+                          <h3 className="text-lg font-black text-stone-900 dark:text-white group-hover:text-orange-500 transition-colors leading-tight">{place.name}</h3>
                        </div>
                        
-                       <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1">
-                             <span className="text-xs font-black text-stone-900 dark:text-white">{place.rating}</span>
-                             <Star size={10} className="text-orange-400 fill-orange-400" />
+                       <div className="flex items-center justify-end gap-1.5 mb-2">
+                          <span className="text-[11px] font-bold text-stone-400 truncate">{place.formatted_address?.split(',')[0]}</span>
+                          <MapPin size={12} className="text-stone-300" />
+                       </div>
+
+                       {place.distance !== undefined && (
+                          <div className="flex items-center justify-end mb-6">
+                            <span className="text-[10px] font-black text-orange-500 bg-orange-50 dark:bg-orange-900/30 px-3 py-1 rounded-full">يبعد {place.distance.toFixed(1)} كم</span>
+                          </div>
+                       )}
+                       
+                       <div className="flex items-center justify-between pt-6 border-t border-stone-50 dark:border-stone-800">
+                          <div className="flex items-center gap-1.5 bg-amber-50 dark:bg-amber-900/20 px-3 py-1.5 rounded-xl">
+                             <span className="text-xs font-black text-amber-600 dark:text-amber-400">{place.rating || '---'}</span>
+                             <Star size={12} className="text-amber-500 fill-amber-500" />
                           </div>
                           {place.user_ratings_total && (
-                            <span className="text-[9px] font-bold text-stone-400">({place.user_ratings_total} تقييم)</span>
+                            <span className="text-[10px] font-black text-stone-400 bg-stone-50 dark:bg-stone-800 px-3 py-1.5 rounded-xl">{place.user_ratings_total} زائر قيموا المكان</span>
                           )}
                        </div>
                     </div>
                   </motion.div>
                 ))}
+            </div>
 
-            {places.filter(p => (p.types?.includes('restaurant') || p.types?.includes('cafe'))).length === 0 && (
-              <div className="flex flex-col items-center justify-center py-32 bg-white dark:bg-stone-900 rounded-[3rem] border border-stone-100 dark:border-stone-800">
-                <RotateCw size={40} className="text-orange-500 animate-spin mb-4" />
-                <p className="text-stone-500 font-bold">جاري البحث عن أشهى قوائم الطعام...</p>
+            {places.filter(p => (p.types?.includes('restaurant') || p.types?.includes('cafe') || p.types?.includes('food'))).length === 0 && (
+              <div className="flex flex-col items-center justify-center py-40 bg-white dark:bg-stone-900 rounded-[3rem] border border-stone-100 dark:border-stone-800 shadow-inner">
+                <div className="relative">
+                   <RotateCw size={60} className="text-orange-500 animate-spin mb-6 opacity-20" />
+                   <Sparkles size={24} className="absolute top-0 right-0 text-orange-400 animate-pulse" />
+                </div>
+                <p className="text-stone-400 font-black text-xl">جاري البحث عن أشهى قوائم الطعام يا أبو عبدالله...</p>
+                <p className="text-stone-300 text-sm mt-2">خلك صبور، الزين يبيله وقت!</p>
               </div>
             )}
-            </div>
           </motion.div>
         ) : viewMode === 'map' ? (
           <motion.div 
@@ -2653,6 +2778,17 @@ export default function App() {
                             اتصال هاتفي
                           </a>
                         )}
+                        {selectedPlace.website && (
+                          <a 
+                            href={selectedPlace.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="py-4 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-[1.2rem] font-bold flex items-center justify-center gap-2 active:scale-95 transition-all text-xs"
+                          >
+                            <Globe size={16} />
+                            تصفح المنيو / الموقع
+                          </a>
+                        )}
                         <button 
                           onClick={() => handleInviteFriend(selectedPlace)}
                           className="py-4 bg-white dark:bg-stone-800 border border-stone-100 dark:border-stone-700 text-stone-900 dark:text-white rounded-[1.2rem] font-bold flex items-center justify-center gap-2 active:scale-95 transition-all text-xs"
@@ -2662,6 +2798,26 @@ export default function App() {
                         </button>
                       </div>
                     </div>
+
+                    {selectedPlace.reviews && selectedPlace.reviews.length > 0 && (
+                      <div className="mb-10 text-right">
+                        <h4 className="font-black text-sm text-stone-900 dark:text-white mb-4">وش يقولون الناس؟</h4>
+                        <div className="space-y-4">
+                          {selectedPlace.reviews.slice(0, 3).map((review, i) => (
+                            <div key={i} className="bg-stone-50 dark:bg-stone-800/40 p-4 rounded-2xl border border-stone-100 dark:border-stone-800">
+                               <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-1">
+                                     <span className="text-xs font-black">{review.rating}</span>
+                                     <Star size={10} className="text-amber-400 fill-amber-400" />
+                                  </div>
+                                  <span className="text-[11px] font-black text-stone-900 dark:text-white">{review.author_name}</span>
+                               </div>
+                               <p className="text-xs text-stone-500 dark:text-stone-400 italic line-clamp-3 leading-relaxed">"{review.text}"</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {selectedPlace.opening_hours?.weekday_text && (
                       <div className="mb-10 text-right bg-stone-50/50 dark:bg-stone-800/30 p-6 rounded-[2rem] border border-stone-100 dark:border-stone-800">
@@ -2801,20 +2957,20 @@ export default function App() {
             setShowMoodSection(!showMoodSection); 
             if (!showMoodSection) setTimeout(() => {
               document.getElementById('mood-section')?.scrollIntoView({ behavior: 'smooth' });
-            }, 100);
+            }, 300);
           }}
-          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${showMoodSection ? 'bg-stone-900 text-white shadow-lg' : 'text-stone-400'}`}
+          className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-[2rem] transition-all ${showMoodSection ? 'bg-stone-900 text-orange-400 shadow-[0_10px_30px_rgba(0,0,0,0.1)]' : 'text-stone-500'}`}
         >
-          <Sparkles size={20} className={showMoodSection ? 'animate-bounce text-orange-400' : ''} />
-          <span className="text-[9px] font-black uppercase tracking-tighter">مزاجك</span>
+          <Sparkles size={22} className={showMoodSection ? 'animate-bounce text-orange-400' : ''} />
+          <span className="text-[10px] font-black uppercase tracking-tighter">مزاجك</span>
         </button>
 
         <button 
           onClick={handleSurpriseMe}
-          className="flex-1 flex flex-col items-center gap-1 py-3 text-emerald-500 rounded-[2rem] transition-all active:scale-90"
+          className="flex-1 flex flex-col items-center gap-1 py-3 text-emerald-600 font-black rounded-[2rem] transition-all active:scale-90"
         >
-          <Dices size={20} />
-          <span className="text-[9px] font-black uppercase tracking-tighter">اختار لي</span>
+          <Dices size={22} />
+          <span className="text-[10px] font-black uppercase tracking-tighter">اختار لي</span>
         </button>
 
         {showInstallButton && (
@@ -2847,6 +3003,48 @@ export default function App() {
           <span className="text-[9px] font-black uppercase tracking-tighter">الخريطة</span>
         </button>
       </nav>
+
+      {/* Floating Smart Assistant FAB */}
+      <div className="fixed bottom-28 right-6 z-[160] flex flex-col gap-3 items-end md:bottom-24">
+         <AnimatePresence>
+           {showMoodSection && (
+             <motion.button
+               initial={{ scale: 0, opacity: 0, x: 20 }}
+               animate={{ scale: 1, opacity: 1, x: 0 }}
+               exit={{ scale: 0, opacity: 0, x: 20 }}
+               onClick={handleSurpriseMe}
+               className="w-12 h-12 bg-white dark:bg-stone-800 text-emerald-500 rounded-full shadow-2xl flex items-center justify-center border border-stone-100 dark:border-stone-800 transition-all hover:scale-110"
+               title="اختار لي"
+             >
+               <Dices size={20} />
+             </motion.button>
+           )}
+         </AnimatePresence>
+         
+         <button 
+           onClick={() => {
+             if (!showMoodSection) {
+               setShowMoodSection(true);
+               setTimeout(() => {
+                 document.getElementById('mood-section')?.scrollIntoView({ behavior: 'smooth' });
+               }, 300);
+             } else {
+               generateMoodRecommendation();
+             }
+           }}
+           disabled={isAiLoading}
+           className={`w-20 h-20 rounded-full flex flex-col items-center justify-center shadow-[0_20px_50px_rgba(0,0,0,0.4)] transition-all z-[161] border-4 ${showMoodSection ? 'bg-orange-500 border-orange-200' : 'bg-stone-900 border-white'} text-white active:scale-110`}
+         >
+           {isAiLoading ? <RotateCw className="animate-spin" size={28} /> : (
+             <>
+               <Sparkles size={32} className={showMoodSection ? 'animate-bounce text-orange-200' : 'text-orange-400'} />
+               <span className="text-[8px] font-black uppercase tracking-tighter mt-1">
+                 {showMoodSection ? 'اسأل أبو عبدالله' : 'خويك الذكي'}
+               </span>
+             </>
+           )}
+         </button>
+      </div>
 
       {/* Floating Action Buttons */}
       <div className="fixed bottom-24 left-6 flex flex-col gap-4 z-[60]">
