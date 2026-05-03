@@ -1626,29 +1626,7 @@ export default function App() {
         </div>
       )}
 
-      {isQuotaExceeded && (
-        <div className="bg-orange-600 text-white p-4 sticky top-20 z-[100] shadow-2xl">
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-             <div className="flex items-center gap-3">
-               <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                 <AlertTriangle size={20} className="animate-bounce" />
-               </div>
-               <div className="text-right">
-                  <p className="font-black text-sm">يا هلا يا أبو عبدالله، قوقل تقول "ارتاح شوي" اليوم!</p>
-                  <p className="text-[10px] font-bold opacity-90">وصلنا للحد الأقصى للاستخدام المجاني (Quota). بعض البيانات قديمة من الذاكرة، وبترجع تتحدث بكرة بإذن الله.</p>
-               </div>
-             </div>
-             <div className="flex gap-2">
-               <button onClick={retryFirestore} className="px-4 py-2 bg-white text-orange-600 rounded-xl text-[10px] font-black hover:bg-orange-50 transition-all">
-                 جرب الحين
-               </button>
-               <button onClick={() => setIsQuotaExceeded(false)} className="bg-white/10 hover:bg-white/20 p-2 rounded-xl transition-all">
-                 <X size={16} />
-               </button>
-             </div>
-          </div>
-        </div>
-      )}
+
 
       <main className={`${viewMode === 'landing' ? '' : 'max-w-7xl mx-auto px-4 py-10 sm:py-16 lg:py-20'}`}>
         {viewMode === 'landing' ? (
