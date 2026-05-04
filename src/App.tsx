@@ -75,7 +75,8 @@ import {
   Shield,
   Briefcase,
   AlertTriangle,
-  Coins
+  Coins,
+  ShoppingBag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
@@ -135,6 +136,26 @@ interface AppNotification {
   message: string;
   type: 'info' | 'success' | 'warning' | 'error';
   timestamp: Date;
+}
+
+interface MenuItem {
+  id?: string;
+  placeId: string;
+  name: string;
+  price: number;
+  imageUrl: string;
+  description?: string;
+}
+
+interface Order {
+  id?: string;
+  placeId: string;
+  userId: string;
+  userName: string;
+  items: { menuItemId: string; name: string; price: number; quantity: number }[];
+  total: number;
+  status: 'pending' | 'confirmed' | 'ready' | 'picked_up' | 'cancelled';
+  createdAt: Timestamp;
 }
 
 const INITIAL_PLACES: PlaceDetail[] = [
@@ -436,6 +457,87 @@ export default function App() {
   const [reviewToDelete, setReviewToDelete] = useState<string | null>(null);
   const [isDeletingReview, setIsDeletingReview] = useState(false);
   const [activePhotoIndex, setActivePhotoIndex] = useState<number>(0);
+
+  // Menu System Logic
+  const fetchMenu = useCallback(async (placeId: string) => {
+    if (!firestoreEnabled) return;
+    setIsMenuLoading(true);
+    try {
+      const q = query(collection(db, 'menus'), where('placeId', '==', placeId));
+      const snapshot = await getDocs(q);
+      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as MenuItem[];
+      setMenuItems(items);
+    } catch (error) {
+      console.error("Error fetching menu:", error);
+    } finally {
+      setIsMenuLoading(false);
+    }
+  }, [firestoreEnabled]);
+
+  const addMenuItem = async () => {
+    if (!selectedPlace?.place_id || !newMenuItem.name || !newMenuItem.price || !isAdmin) return;
+    setIsAddingMenuItem(true);
+    try {
+      await addDoc(collection(db, 'menus'), {
+        placeId: selectedPlace.place_id,
+        name: newMenuItem.name,
+        price: parseFloat(newMenuItem.price),
+        imageUrl: newMenuItem.imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400',
+        description: newMenuItem.description,
+        createdAt: serverTimestamp()
+      });
+      setNewMenuItem({ name: '', price: '', imageUrl: '', description: '' });
+      fetchMenu(selectedPlace.place_id);
+    } catch (error) {
+      console.error("Error adding menu item:", error);
+    } finally {
+      setIsAddingMenuItem(false);
+    }
+  };
+
+  const submitOrder = async () => {
+    if (!user || !selectedPlace?.place_id || cart.length === 0) return;
+    setIsSubmittingOrder(true);
+    try {
+      const total = cart.reduce((acc, curr) => acc + (curr.item.price * curr.quantity), 0);
+      const orderData: Omit<Order, 'id'> = {
+        placeId: selectedPlace.place_id,
+        userId: user.uid,
+        userName: user.displayName || 'أبو عبدالله',
+        items: cart.map(c => ({
+          menuItemId: c.item.id!,
+          name: c.item.name,
+          price: c.item.price,
+          quantity: c.quantity
+        })),
+        total,
+        status: 'pending',
+        createdAt: serverTimestamp() as any
+      };
+      await addDoc(collection(db, 'orders'), orderData);
+      setOrderSuccess(true);
+      setCart([]);
+      setTimeout(() => setOrderSuccess(false), 3000);
+    } catch (error) {
+      console.error("Error submitting order:", error);
+    } finally {
+      setIsSubmittingOrder(false);
+    }
+  };
+
+  const addToCart = (item: MenuItem) => {
+    setCart(prev => {
+      const existing = prev.find(c => c.item.id === item.id);
+      if (existing) {
+        return prev.map(c => c.item.id === item.id ? { ...c, quantity: c.quantity + 1 } : c);
+      }
+      return [...prev, { item, quantity: 1 }];
+    });
+  };
+
+  const removeFromCart = (itemId: string) => {
+    setCart(prev => prev.filter(c => c.item.id !== itemId));
+  };
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [pendingReminder, setPendingReminder] = useState<Visit | null>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -473,6 +575,20 @@ export default function App() {
   // Favorites state
   const [favorites, setFavorites] = useState<string[]>([]);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+
+  // Menu & Ordering States
+  const [showMenuModal, setShowMenuModal] = useState(false);
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [isMenuLoading, setIsMenuLoading] = useState(false);
+  const [cart, setCart] = useState<{ item: MenuItem; quantity: number }[]>([]);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [orderSuccess, setOrderSuccess] = useState(false);
+  
+  // Vendor Dashboard States
+  const [showVendorDashboard, setShowVendorDashboard] = useState(false);
+  const [newMenuItem, setNewMenuItem] = useState({ name: '', price: '', imageUrl: '', description: '' });
+  const [isAddingMenuItem, setIsAddingMenuItem] = useState(false);
+  const [vendorOrders, setVendorOrders] = useState<Order[]>([]);
 
   // Mood Selection States
   const [showMoodSection, setShowMoodSection] = useState(false);
@@ -2664,6 +2780,18 @@ export default function App() {
                               </span>
                               <div className="flex items-center gap-2">
                                 <button 
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    setSelectedPlace(place);
+                                    fetchMenu(place.place_id!);
+                                    setShowMenuModal(true);
+                                  }}
+                                  className="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-[10px] font-black flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+                                >
+                                  <UtensilsCrossed size={12} />
+                                  قائمة الطعام
+                                </button>
+                                <button 
                                   onClick={(e) => { e.stopPropagation(); navigateToPlace(place.place_id!, place.name); }}
                                   className="w-8 h-8 flex items-center justify-center bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white transition-all ring-4 ring-transparent hover:ring-blue-500/10"
                                 >
@@ -2951,6 +3079,187 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {showMenuModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4" dir="rtl">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowMenuModal(false)} className="absolute inset-0 bg-stone-900/60 backdrop-blur-md" />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 50 }} 
+              animate={{ scale: 1, opacity: 1, y: 0 }} 
+              exit={{ scale: 0.9, opacity: 0, y: 50 }}
+              className="bg-white dark:bg-stone-900 w-full max-w-2xl rounded-[3rem] shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[90vh] border border-stone-100 dark:border-stone-800"
+            >
+              <div className="p-8 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between">
+                <div className="text-right">
+                  <h2 className="text-2xl font-black text-stone-900 dark:text-white mb-1">{selectedPlace?.name}</h2>
+                  <p className="text-stone-400 text-[10px] font-black uppercase tracking-widest">قائمة الطعام والطلب للاستلام</p>
+                </div>
+                <button onClick={() => setShowMenuModal(false)} className="w-12 h-12 bg-stone-50 dark:bg-stone-800 rounded-2xl flex items-center justify-center text-stone-400 hover:text-rose-500 transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 no-scrollbar">
+                {isMenuLoading ? (
+                  <div className="flex flex-col items-center justify-center py-20 gap-4">
+                    <RotateCw className="animate-spin text-orange-500" size={40} />
+                    <p className="text-stone-400 font-black">جاري جلب المنيو...</p>
+                  </div>
+                ) : menuItems.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {menuItems.map((item) => (
+                      <div key={item.id} className="bg-stone-50 dark:bg-stone-800/50 rounded-3xl p-4 flex gap-4 group transition-all hover:shadow-lg">
+                        <div className="w-20 h-20 rounded-2xl overflow-hidden bg-white shadow-sm flex-shrink-0">
+                          <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                        </div>
+                        <div className="flex-1 text-right flex flex-col">
+                          <h4 className="font-black text-stone-900 dark:text-white text-sm mb-1">{item.name}</h4>
+                          <p className="text-[10px] text-stone-400 font-bold mb-2 line-clamp-2">{item.description || 'وصف الطبق غير متوفر'}</p>
+                          <div className="mt-auto flex items-center justify-between">
+                            <span className="text-orange-600 dark:text-orange-400 font-black text-sm">{item.price} ريال</span>
+                            <button 
+                              onClick={() => addToCart(item)}
+                              className="w-8 h-8 rounded-full bg-white dark:bg-stone-700 text-orange-500 shadow-sm flex items-center justify-center hover:bg-orange-500 hover:text-white transition-all active:scale-90"
+                            >
+                              <Plus size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-20 text-center gap-4">
+                    <div className="w-20 h-20 rounded-3xl bg-stone-50 dark:bg-stone-800 flex items-center justify-center text-stone-200">
+                      <UtensilsCrossed size={40} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-black text-stone-900 dark:text-white mb-1">المنيو قادم قريباً!</h3>
+                      <p className="text-stone-400 text-xs">صاحب المطعم ما أضاف قائمة الطعام بعد.</p>
+                    </div>
+                    {isAdmin && (
+                      <button 
+                        onClick={() => setShowVendorDashboard(true)}
+                        className="mt-4 px-6 py-3 bg-stone-900 text-white rounded-2xl text-[10px] font-black"
+                      >
+                        أضف أنت كأدمن!
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {cart.length > 0 && (
+                <div className="p-8 bg-stone-50 dark:bg-stone-800/80 border-t border-stone-100 dark:border-stone-800">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="text-right">
+                      <p className="text-[10px] font-black text-stone-400 uppercase tracking-widest mb-1">إجمالي سلة الطلب</p>
+                      <h3 className="text-2xl font-black text-stone-900 dark:text-white">
+                        {cart.reduce((acc, curr) => acc + (curr.item.price * curr.quantity), 0)} ريال
+                      </h3>
+                    </div>
+                    <div className="flex -space-x-2 scroll-smooth">
+                        {cart.slice(0, 4).map((c, i) => (
+                          <div key={i} className="w-10 h-10 rounded-full border-2 border-white bg-white overflow-hidden shadow-sm relative group">
+                            <img src={c.item.imageUrl} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/20 flex items-center justify-center text-[8px] text-white font-black">{c.quantity}x</div>
+                            <button onClick={() => removeFromCart(c.item.id!)} className="absolute inset-0 bg-rose-500/80 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity"><X size={12} /></button>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                  <button 
+                    onClick={submitOrder}
+                    disabled={isSubmittingOrder || orderSuccess}
+                    className={`w-full py-5 rounded-[1.8rem] font-black text-sm flex items-center justify-center gap-3 transition-all active:scale-95 shadow-xl ${orderSuccess ? 'bg-emerald-500 text-white' : 'bg-orange-500 hover:bg-orange-600 text-white'}`}
+                  >
+                    {isSubmittingOrder ? (
+                      <RotateCw className="animate-spin" size={20} />
+                    ) : orderSuccess ? (
+                      <><CheckCircle size={20} /> تم إرسال الطلب!</>
+                    ) : (
+                      <><ShoppingBag size={20} /> إرسال الطلب للاستلام من الفرع</>
+                    )}
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <div style={{ display: showVendorDashboard ? 'block' : 'none' }}>
+        <AnimatePresence>
+          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4" dir="rtl">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowVendorDashboard(false)} className="absolute inset-0 bg-black/70 backdrop-blur-xl" />
+            <motion.div 
+               initial={{ scale: 0.9, opacity: 0 }} 
+               animate={{ scale: 1, opacity: 1 }} 
+               exit={{ scale: 0.9, opacity: 0 }}
+               className="bg-white dark:bg-stone-900 w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl relative z-10 border border-stone-200"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <div className="text-right">
+                  <h3 className="text-xl font-black text-stone-900 dark:text-white">لوحة تحكم صاحب المطعم</h3>
+                  <p className="text-[10px] text-stone-400 font-black uppercase tracking-widest">{selectedPlace?.name}</p>
+                </div>
+                <button onClick={() => setShowVendorDashboard(false)} className="w-10 h-10 bg-stone-50 dark:bg-stone-800 rounded-xl flex items-center justify-center text-stone-400"><X size={20} /></button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">اسم الطبق</label>
+                  <input 
+                    type="text" 
+                    value={newMenuItem.name}
+                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
+                    placeholder="مثال: برجر دجاج كرسبي"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">السعر (ريال)</label>
+                  <input 
+                    type="number" 
+                    value={newMenuItem.price}
+                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, price: e.target.value }))}
+                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
+                    placeholder="25.00"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">رابط صورة الطبق</label>
+                  <input 
+                    type="text" 
+                    value={newMenuItem.imageUrl}
+                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, imageUrl: e.target.value }))}
+                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
+                    placeholder="رابط مباشر للصورة"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">الوصف</label>
+                  <textarea 
+                    value={newMenuItem.description}
+                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, description: e.target.value }))}
+                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner h-24 resize-none" 
+                    placeholder="وصف مكونات الطبق..."
+                  />
+                </div>
+
+                <button 
+                  onClick={addMenuItem}
+                  disabled={isAddingMenuItem}
+                  className="w-full py-5 bg-stone-900 text-white rounded-2xl font-black text-sm mt-4 shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3"
+                >
+                  {isAddingMenuItem ? <RotateCw className="animate-spin" size={18} /> : <><Plus size={18} /> إضافة للمنيو</>}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        </AnimatePresence>
+      </div>
 
       <AnimatePresence>
         {pendingReminder && (

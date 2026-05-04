@@ -100,15 +100,51 @@
     },
     "Rating": {
       "title": "Consolidated Rating",
-      "description": "Consolidated rating for a place.",
+      "description": "Consolidated rating for a place",
       "type": "object",
       "properties": {
         "rating": { "type": "number" },
         "count": { "type": "number" }
       }
+    },
+    "MenuItem": {
+      "title": "Menu Item",
+      "description": "A food or drink item in a restaurant's menu.",
+      "type": "object",
+      "properties": {
+        "placeId": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "imageUrl": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["placeId", "name", "price"]
+    },
+    "Order": {
+      "title": "Customer Order",
+      "description": "A pick-up order placed by a user.",
+      "type": "object",
+      "properties": {
+        "placeId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "items": { "type": "array", "items": { "type": "object" } },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "ready", "picked_up", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["placeId", "userId", "items", "total", "status", "createdAt"]
     }
   },
   "firestore": {
+    "/menus/{menuId}": {
+      "schema": "MenuItem",
+      "description": "Food items for restaurants"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Customer pick-up orders"
+    },
     "/coveragePosts/{postId}/media/{mediaId}": {
       "schema": "CoverageMedia",
       "description": "Images and videos attached to a post"

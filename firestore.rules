@@ -137,5 +137,39 @@ service cloud.firestore {
                       incoming().diff(existing()).affectedKeys().hasOnly(['rated']);
       allow delete: if isOwner(resource.data.userId) && isValidId(visitId);
     }
+
+    // MenuItem validation
+    function isValidMenuItem(data) {
+      return data.keys().hasAll(['placeId', 'name', 'price', 'imageUrl']) &&
+             data.placeId is string && data.placeId.size() <= 128 &&
+             data.name is string && data.name.size() <= 256 &&
+             data.price is number && data.price >= 0 &&
+             data.imageUrl is string && data.imageUrl.size() <= 2048 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+             (!('createdAt' in data) || (data.createdAt == request.time));
+    }
+
+    // Order validation
+    function isValidOrder(data) {
+      return data.keys().hasAll(['placeId', 'userId', 'userName', 'items', 'total', 'status', 'createdAt']) &&
+             data.placeId is string && data.placeId.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.userName is string && data.userName.size() <= 256 &&
+             data.items is list && data.items.size() >= 1 &&
+             data.total is number && data.total >= 0 &&
+             data.status in ['pending', 'confirmed', 'ready', 'picked_up', 'cancelled'] &&
+             data.createdAt == request.time;
+    }
+
+    match /menus/{menuId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidOrder(incoming());
+      allow update: if isAdmin() || (isOwner(resource.data.userId) && incoming().diff(existing()).affectedKeys().hasOnly(['status']) && incoming().status == 'cancelled');
+    }
   }
 }
