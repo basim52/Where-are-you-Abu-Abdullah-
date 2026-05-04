@@ -37,7 +37,6 @@ import {
   LogOut,
   User as UserIcon,
   RotateCw,
-  Trash2,
   Plus,
   Upload,
   Download,
@@ -76,7 +75,11 @@ import {
   Briefcase,
   AlertTriangle,
   Coins,
-  ShoppingBag
+  ShoppingBag,
+  Trash2,
+  UserCheck,
+  ShieldCheck,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
@@ -157,6 +160,18 @@ interface Order {
   total: number;
   status: 'pending' | 'confirmed' | 'ready' | 'picked_up' | 'cancelled';
   createdAt: Timestamp;
+}
+
+interface UserProfile {
+  uid: string;
+  role: 'customer' | 'vendor' | 'admin';
+  ownedPlaceId?: string;
+}
+
+interface RestaurantConfig {
+  placeId: string;
+  whatsappNumber: string;
+  ownerId?: string;
 }
 
 const INITIAL_PLACES: PlaceDetail[] = [
@@ -274,7 +289,6 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
 
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [userProfile, setUserProfile] = useState<{ email: string; role: 'admin' | 'user' } | null>(null);
 
   // Hardcoded Admin for current environment
   const ADMIN_EMAIL = 'basim5252@gmail.com';
@@ -550,7 +564,7 @@ export default function App() {
       addNotification('يرجى إدخال اسم الصنف والسعر', 'warning');
       return;
     }
-    if (!isAdmin) {
+    if (!isOwner) {
       addNotification('ليست لديك صلاحيات المسؤول للإضافة', 'error');
       return;
     }
@@ -666,6 +680,11 @@ export default function App() {
   const [favorites, setFavorites] = useState<string[]>([]);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 
+  // User Profiling
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [showRoleSelection, setShowRoleSelection] = useState(false);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+
   // Menu & Ordering States
   const [showMenuModal, setShowMenuModal] = useState(false);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -696,7 +715,7 @@ export default function App() {
 
   // WhatsApp Message Formatter
   const sendWhatsAppOrder = (items: any[], total: number, restName: string) => {
-    const defaultNumber = '966500000000'; // Default restaurant number
+    const targetNumber = restaurantWhatsapp || '966500000000';
     let message = `*طلب جديد للاستلام من: ${restName}*\n\n`;
     items.forEach((item, index) => {
       message += `${index + 1}. ${item.name} (${item.quantity}x) - ${item.price * item.quantity} ريال\n`;
@@ -704,15 +723,129 @@ export default function App() {
     message += `\n*الإجمالي: ${total} ريال*\n`;
     message += `\nالاسم: ${user?.displayName || 'عميل أبو عبدالله'}`;
     const encodedMessage = encodeURIComponent(message);
-    window.open(`https://wa.me/${defaultNumber}?text=${encodedMessage}`, '_blank');
+    window.open(`https://wa.me/${targetNumber}?text=${encodedMessage}`, '_blank');
   };
   
   // Vendor Dashboard States
   const [showVendorDashboard, setShowVendorDashboard] = useState(false);
+  const [restaurantWhatsapp, setRestaurantWhatsapp] = useState<string>('966500000000');
+  const [restaurantOwnerId, setRestaurantOwnerId] = useState<string | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [newMenuItem, setNewMenuItem] = useState({ name: '', price: '', imageUrl: '', description: '' });
   const [isAddingMenuItem, setIsAddingMenuItem] = useState(false);
   const [isUploadingMenuImage, setIsUploadingMenuImage] = useState(false);
   const [vendorOrders, setVendorOrders] = useState<Order[]>([]);
+
+  // Derived Access Rights
+  const isOwner = isAdmin || (user && restaurantOwnerId === user.uid);
+
+  const fetchRestaurantSettings = useCallback(async (placeId: string) => {
+    if (!firestoreEnabled) return;
+    try {
+      const docRef = doc(db, 'restaurantSettings', placeId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setRestaurantWhatsapp(data.whatsappNumber || '966500000000');
+        setRestaurantOwnerId(data.ownerId || null);
+      } else {
+        setRestaurantWhatsapp('966500000000');
+        setRestaurantOwnerId(null);
+      }
+    } catch (error) {
+      console.error("Error fetching restaurant settings:", error);
+    }
+  }, [firestoreEnabled]);
+
+  const saveRestaurantSettings = async () => {
+    if (!selectedPlace?.place_id || !isOwner) return;
+    setIsSavingSettings(true);
+    try {
+      await setDoc(doc(db, 'restaurantSettings', selectedPlace.place_id), {
+        placeId: selectedPlace.place_id,
+        whatsappNumber: restaurantWhatsapp,
+        ownerId: restaurantOwnerId || user?.uid,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      addNotification('تم حفظ الإعدادات بنجاح', 'success');
+    } catch (error) {
+      addNotification('فشل حفظ الإعدادات', 'error');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const claimRestaurant = async () => {
+    if (!user || !selectedPlace?.place_id || restaurantOwnerId) return;
+    
+    // Check if user is a vendor
+    if (userProfile?.role !== 'vendor' && !isAdmin) {
+      addNotification('يجب أن يكون نوع حسابك "تاجر" لامتلاك مطعم.', 'warning');
+      setShowRoleSelection(true);
+      return;
+    }
+
+    setIsSavingSettings(true);
+    try {
+      await setDoc(doc(db, 'restaurantSettings', selectedPlace.place_id), {
+        placeId: selectedPlace.place_id,
+        whatsappNumber: restaurantWhatsapp || '966500000000',
+        ownerId: user.uid,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      
+      setRestaurantOwnerId(user.uid);
+      addNotification('مبروك! لقد أصبحت صاحب هذا المطعم الآن.', 'success');
+    } catch (error) {
+      addNotification('فشل في عملية التملك.', 'error');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const fetchUserProfile = useCallback(async (uid: string) => {
+    if (!firestoreEnabled) return;
+    try {
+      const docSnap = await getDoc(doc(db, 'userProfiles', uid));
+      if (docSnap.exists()) {
+        setUserProfile(docSnap.data() as UserProfile);
+      } else {
+        setShowRoleSelection(true);
+      }
+    } catch (e) {
+      console.error("Error fetching profile", e);
+    }
+  }, [firestoreEnabled]);
+
+  const updateUserRole = async (role: 'customer' | 'vendor') => {
+    if (!user) return;
+    setIsUpdatingProfile(true);
+    try {
+      const profileData: UserProfile = {
+        uid: user.uid,
+        role,
+      };
+      await setDoc(doc(db, 'userProfiles', user.uid), {
+        ...profileData,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setUserProfile(profileData);
+      setShowRoleSelection(false);
+      addNotification(`تم تحديث نوع الحساب إلى ${role === 'vendor' ? 'تاجر' : 'عميل'}`, 'success');
+    } catch (e) {
+      addNotification('حدث خطأ في تحديث البيانات', 'error');
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchUserProfile(user.uid);
+    } else {
+      setUserProfile(null);
+    }
+  }, [user, fetchUserProfile]);
 
   // Real-time Orders Listener for Vendor
   useEffect(() => {
@@ -3279,13 +3412,22 @@ export default function App() {
                     <h2 className="text-2xl font-black text-stone-900 dark:text-white mb-1">{selectedPlace?.name}</h2>
                     <p className="text-stone-400 text-[10px] font-black uppercase tracking-widest">قائمة الطعام والطلب للاستلام</p>
                   </div>
-                  {isAdmin && (
+                  {isOwner && (
                     <button 
                       onClick={() => setShowVendorDashboard(true)}
                       className="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center hover:bg-orange-600 hover:text-white transition-all shadow-sm"
                       title="إدارة المنيو"
                     >
-                      <Plus size={20} />
+                      <Settings size={20} />
+                    </button>
+                  )}
+                  {user && !restaurantOwnerId && userProfile?.role === 'vendor' && (
+                    <button 
+                      onClick={claimRestaurant}
+                      disabled={isSavingSettings}
+                      className="px-4 h-10 bg-emerald-500 text-white rounded-xl flex items-center gap-2 text-[10px] font-black hover:bg-emerald-600 transition-all shadow-sm"
+                    >
+                      {isSavingSettings ? <RotateCw className="animate-spin" size={14} /> : <><ShieldCheck size={16} /> تملك هذا المطعم</>}
                     </button>
                   )}
                 </div>
@@ -3375,6 +3517,49 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showRoleSelection && (
+          <div className="fixed inset-0 z-[500] flex items-center justify-center p-4" dir="rtl">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-stone-900/80 backdrop-blur-xl" />
+            <motion.div 
+               initial={{ scale: 0.9, opacity: 0 }} 
+               animate={{ scale: 1, opacity: 1 }} 
+               exit={{ scale: 0.9, opacity: 0 }}
+               className="bg-white dark:bg-stone-900 w-full max-w-md rounded-[3rem] p-10 shadow-3xl relative z-10 border border-stone-100 dark:border-stone-800 text-center"
+            >
+              <div className="w-20 h-20 bg-orange-50 dark:bg-orange-900/30 rounded-3xl flex items-center justify-center text-orange-500 mx-auto mb-6">
+                <UserCheck size={40} />
+              </div>
+              <h3 className="text-2xl font-black text-stone-900 dark:text-white mb-2">أهلاً بك في أبو عبدالله</h3>
+              <p className="text-stone-400 text-xs font-bold mb-8">اختر نوع حسابك لتخصيص تجربتك في المنصة</p>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => updateUserRole('customer')}
+                  disabled={isUpdatingProfile}
+                  className="flex flex-col items-center gap-3 p-6 rounded-[2.5rem] bg-stone-50 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700 transition-all border-2 border-transparent hover:border-orange-200"
+                >
+                  <div className="w-12 h-12 bg-white dark:bg-stone-900 rounded-2xl flex items-center justify-center text-blue-500 shadow-sm"><ShoppingBag size={24} /></div>
+                  <span className="text-xs font-black text-stone-900 dark:text-white">أنا عميل</span>
+                </button>
+                <button 
+                  onClick={() => updateUserRole('vendor')}
+                  disabled={isUpdatingProfile}
+                  className="flex flex-col items-center gap-3 p-6 rounded-[2.5rem] bg-stone-50 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700 transition-all border-2 border-transparent hover:border-orange-200"
+                >
+                  <div className="w-12 h-12 bg-white dark:bg-stone-900 rounded-2xl flex items-center justify-center text-orange-500 shadow-sm"><Briefcase size={24} /></div>
+                  <span className="text-xs font-black text-stone-900 dark:text-white">أنا صاحب مطعم</span>
+                </button>
+              </div>
+
+              <div className="mt-8 pt-6 border-t border-stone-100 dark:border-stone-800">
+                <p className="text-[10px] text-stone-400 font-bold">يمكنك تغيير هذا الخيار لاحقاً من الإعدادات</p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <div style={{ display: showVendorDashboard ? 'block' : 'none' }}>
         <AnimatePresence>
           <div className="fixed inset-0 z-[300] flex items-center justify-center p-4" dir="rtl">
@@ -3394,6 +3579,33 @@ export default function App() {
               </div>
 
               <div className="space-y-6 overflow-y-auto max-h-[60vh] no-scrollbar">
+                {/* WhatsApp Settings Section */}
+                <div className="bg-emerald-50/50 dark:bg-emerald-900/10 rounded-[2rem] p-5 border border-emerald-100/50 dark:border-emerald-800/30 space-y-4">
+                  <h4 className="text-sm font-black text-emerald-900 dark:text-emerald-100 flex items-center gap-2">
+                    <Phone size={18} className="text-emerald-500" />
+                    رقم الواتساب للطلبات
+                  </h4>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={restaurantWhatsapp}
+                      onChange={(e) => setRestaurantWhatsapp(e.target.value)}
+                      className="flex-1 bg-white dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-sm" 
+                      placeholder="966500000000"
+                    />
+                    <button 
+                      onClick={saveRestaurantSettings}
+                      disabled={isSavingSettings}
+                      className="px-6 bg-emerald-500 text-white rounded-2xl font-black text-[10px] shadow-lg active:scale-95 transition-all flex items-center justify-center min-w-[70px]"
+                    >
+                      {isSavingSettings ? <RotateCw className="animate-spin" size={16} /> : 'حفظ'}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-emerald-600/70 dark:text-emerald-400/50 font-bold leading-relaxed px-1">
+                    أدخل رقم الجوال الذي تود استلام الطلبات عليه. (مثال: 966501234567)
+                  </p>
+                </div>
+
                 {/* Orders Section */}
                 <div className="space-y-4">
                   <h4 className="text-sm font-black text-stone-900 dark:text-white flex items-center gap-2">

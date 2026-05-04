@@ -172,5 +172,15 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidOrder(incoming());
       allow update: if isAdmin() || (isOwner(resource.data.userId) && incoming().diff(existing()).affectedKeys().hasOnly(['status']) && incoming().status == 'cancelled');
     }
+
+    match /restaurantSettings/{placeId} {
+      allow read: if true;
+      allow write: if isAdmin() || (isSignedIn() && (!exists(/databases/$(database)/documents/restaurantSettings/$(placeId)) || resource.data.ownerId == request.auth.uid));
+    }
+
+    match /userProfiles/{uid} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == uid;
+    }
   }
 }

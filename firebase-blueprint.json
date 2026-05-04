@@ -134,9 +134,41 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["placeId", "userId", "items", "total", "status", "createdAt"]
+    },
+    "RestaurantSettings": {
+      "title": "Restaurant Specific Settings",
+      "description": "Settings for a specific restaurant/place, like its WhatsApp number.",
+      "type": "object",
+      "properties": {
+        "placeId": { "type": "string" },
+        "whatsappNumber": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["placeId", "whatsappNumber"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Extended information about a user, including their role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "vendor", "admin"] },
+        "ownedPlaceId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role"]
     }
   },
   "firestore": {
+    "/userProfiles/{uid}": {
+      "schema": "UserProfile",
+      "description": "Profiles for users differentiating roles"
+    },
+    "/restaurantSettings/{placeId}": {
+      "schema": "RestaurantSettings",
+      "description": "Configuration for a specific restaurant/cafe"
+    },
     "/menus/{menuId}": {
       "schema": "MenuItem",
       "description": "Food items for restaurants"
