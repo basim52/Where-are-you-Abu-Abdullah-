@@ -84,7 +84,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
 import firebaseConfig from '../firebase-applet-config.json';
-import { auth, db, signInWithGoogle, testFirestoreConnection, handleFirestoreError, OperationType } from './lib/firebase';
+import { auth, db, signInWithGoogle, testFirestoreConnection, handleFirestoreError, OperationType, runTransaction } from './lib/firebase';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { 
   collection, 
@@ -156,8 +156,11 @@ interface Order {
   placeId: string;
   userId: string;
   userName: string;
+  customerPhone?: string;
+  notes?: string;
   items: { menuItemId: string; name: string; price: number; quantity: number }[];
   total: number;
+  orderNumber?: number;
   status: 'pending' | 'confirmed' | 'ready' | 'picked_up' | 'cancelled';
   createdAt: Timestamp;
 }
@@ -592,6 +595,12 @@ export default function App() {
 
   const submitOrder = async () => {
     if (!user || !selectedPlace?.place_id || cart.length === 0) return;
+    
+    if (!customerPhone || customerPhone.length < 8) {
+      addNotification('يرجى إدخال رقم جوال صحيح للتواصل', 'warning');
+      return;
+    }
+
     setIsSubmittingOrder(true);
     try {
       const total = cart.reduce((acc, curr) => acc + (curr.item.price * curr.quantity), 0);
@@ -602,12 +611,36 @@ export default function App() {
         quantity: c.quantity
       }));
 
+      // Use a transaction to get a sequential order number
+      const nextOrderNumber = await runTransaction(db, async (transaction) => {
+        const settingsRef = doc(db, 'restaurantSettings', selectedPlace.place_id);
+        const settingsDoc = await transaction.get(settingsRef);
+        
+        let lastNum = 0;
+        if (settingsDoc.exists()) {
+          lastNum = settingsDoc.data().lastOrderNumber || 0;
+        }
+        
+        const newNum = lastNum + 1;
+        
+        // If doc doesn't exist, we create it during claim or here with default settings
+        transaction.set(settingsRef, { 
+          lastOrderNumber: newNum,
+          updatedAt: serverTimestamp() 
+        }, { merge: true });
+        
+        return newNum;
+      });
+
       const orderData: Omit<Order, 'id'> = {
         placeId: selectedPlace.place_id,
         userId: user.uid,
         userName: user.displayName || 'أبو عبدالله',
+        customerPhone: customerPhone,
+        notes: orderNotes,
         items: itemsFormatted,
         total,
+        orderNumber: nextOrderNumber, // Add the sequential number
         status: 'pending',
         createdAt: serverTimestamp() as any
       };
@@ -615,11 +648,12 @@ export default function App() {
       // 1. Save to Firestore
       await addDoc(collection(db, 'orders'), orderData);
       
-      // 2. Open WhatsApp link
-      sendWhatsAppOrder(itemsFormatted, total, selectedPlace.name);
+      // 2. Open WhatsApp link to Restaurant
+      sendWhatsAppOrder(itemsFormatted, total, selectedPlace.name, orderNotes, nextOrderNumber);
 
       setOrderSuccess(true);
       setCart([]);
+      setOrderNotes('');
       setTimeout(() => setOrderSuccess(false), 3000);
     } catch (error) {
       console.error("Error submitting order:", error);
@@ -687,6 +721,8 @@ export default function App() {
 
   // Menu & Ordering States
   const [showMenuModal, setShowMenuModal] = useState(false);
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [orderNotes, setOrderNotes] = useState('');
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [isMenuLoading, setIsMenuLoading] = useState(false);
   const [cart, setCart] = useState<{ item: MenuItem; quantity: number }[]>([]);
@@ -714,12 +750,17 @@ export default function App() {
   };
 
   // WhatsApp Message Formatter
-  const sendWhatsAppOrder = (items: any[], total: number, restName: string) => {
+  const sendWhatsAppOrder = (items: any[], total: number, restName: string, notes?: string, orderNum?: number) => {
     const targetNumber = restaurantWhatsapp || '966500000000';
-    let message = `*طلب جديد للاستلام من: ${restName}*\n\n`;
+    let message = `*طلب جديد #${orderNum || '---'} للاستلام من: ${restName}*\n\n`;
     items.forEach((item, index) => {
       message += `${index + 1}. ${item.name} (${item.quantity}x) - ${item.price * item.quantity} ريال\n`;
     });
+    
+    if (notes) {
+      message += `\n*ملاحظات الزبون:* ${notes}\n`;
+    }
+
     message += `\n*الإجمالي: ${total} ريال*\n`;
     message += `\nالاسم: ${user?.displayName || 'عميل أبو عبدالله'}`;
     const encodedMessage = encodeURIComponent(message);
@@ -847,6 +888,12 @@ export default function App() {
     }
   }, [user, fetchUserProfile]);
 
+  useEffect(() => {
+    if ((showMenuModal || showVendorDashboard) && selectedPlace?.place_id) {
+      fetchRestaurantSettings(selectedPlace.place_id);
+    }
+  }, [showMenuModal, showVendorDashboard, selectedPlace?.place_id, fetchRestaurantSettings]);
+
   // Real-time Orders Listener for Vendor
   useEffect(() => {
     if (!firestoreEnabled || !showVendorDashboard || !selectedPlace?.place_id) return;
@@ -877,10 +924,17 @@ export default function App() {
     return () => unsubscribe();
   }, [showVendorDashboard, selectedPlace?.place_id, firestoreEnabled]);
 
-  const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
+  const updateOrderStatus = async (orderId: string, newStatus: Order['status'], order?: Order) => {
     try {
       await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
       addNotification('تم تحديث حالة الطلب بنجاح', 'success');
+
+      // Send Ready WhatsApp Notification to Customer
+      if (newStatus === 'ready' && order?.customerPhone) {
+        const message = `مرحباً ${order.userName}! 🌟\nيسعدنا إبلاغك بأن طلبك الشهي من *${selectedPlace?.name || 'مطعمنا'}* أصبح جاهزاً للاستلام الآن.\n\nننتظر زيارتك! ✨`;
+        const encoded = encodeURIComponent(message);
+        window.open(`https://wa.me/${order.customerPhone.replace(/\D/g, '')}?text=${encoded}`, '_blank');
+      }
     } catch (error) {
       addNotification('فشل تحديث الحالة', 'error');
     }
@@ -3497,6 +3551,28 @@ export default function App() {
                         ))}
                     </div>
                   </div>
+
+                  <div className="mb-4">
+                    <label className="block text-[10px] font-black text-stone-400 uppercase tracking-widest mb-2 px-1 text-right">رقم جوالك (ليتواصل معك المطعم)</label>
+                    <input 
+                      type="tel"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      placeholder="96650XXXXXXX"
+                      className="w-full bg-white dark:bg-stone-900/50 border-none rounded-2xl p-4 text-sm font-bold shadow-sm focus:ring-2 focus:ring-orange-500"
+                    />
+                  </div>
+
+                  <div className="mb-6">
+                    <label className="block text-[10px] font-black text-stone-400 uppercase tracking-widest mb-2 px-1 text-right">ملاحظات إضافية (اختياري)</label>
+                    <textarea 
+                      value={orderNotes}
+                      onChange={(e) => setOrderNotes(e.target.value)}
+                      placeholder="أضف أي ملاحظات (مثلاً: بدون مايونيز، زيادة شطة...)"
+                      className="w-full bg-white dark:bg-stone-900/50 border-none rounded-2xl p-4 text-sm font-bold shadow-sm focus:ring-2 focus:ring-orange-500 h-24 resize-none"
+                    />
+                  </div>
+
                   <button 
                     onClick={submitOrder}
                     disabled={isSubmittingOrder || orderSuccess}
@@ -3617,7 +3693,7 @@ export default function App() {
                       {vendorOrders.map(order => (
                         <div key={order.id} className="bg-stone-50 dark:bg-stone-800/50 rounded-2xl p-4 border border-stone-100 dark:border-stone-700">
                           <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] font-black text-blue-500 bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded-lg">#{order.id?.slice(-4)}</span>
+                            <span className="text-[10px] font-black text-blue-500 bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded-lg">#{order.orderNumber || order.id?.slice(-4)}</span>
                             <span className={`text-[10px] font-black px-2 py-1 rounded-lg ${
                               order.status === 'pending' ? 'bg-orange-100 text-orange-600' : 
                               order.status === 'ready' ? 'bg-emerald-100 text-emerald-600' : 'bg-stone-100 text-stone-500'
@@ -3626,6 +3702,14 @@ export default function App() {
                             </span>
                           </div>
                           <p className="text-xs font-black text-stone-900 dark:text-white mb-2">{order.userName}</p>
+                          
+                          {order.notes && (
+                            <div className="mb-3 p-2 bg-orange-50 dark:bg-orange-900/20 rounded-xl border border-orange-100 dark:border-orange-800/30">
+                              <p className="text-[9px] font-black text-orange-600 dark:text-orange-400 mb-1">ملاحظات العميل:</p>
+                              <p className="text-[10px] text-stone-600 dark:text-stone-300 font-bold">{order.notes}</p>
+                            </div>
+                          )}
+
                           <div className="text-[10px] text-stone-500 space-y-1 mb-3">
                             {order.items.map((item, i) => (
                               <div key={i} className="flex justify-between items-center">
@@ -3641,7 +3725,7 @@ export default function App() {
                           {order.status === 'pending' && (
                             <div className="flex gap-2">
                               <button 
-                                onClick={() => updateOrderStatus(order.id!, 'ready')}
+                                onClick={() => updateOrderStatus(order.id!, 'ready', order)}
                                 className="flex-1 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-black"
                               >
                                 تم التحضير / جاهز

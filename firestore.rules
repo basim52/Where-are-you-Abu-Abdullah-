@@ -155,6 +155,8 @@ service cloud.firestore {
              data.placeId is string && data.placeId.size() <= 128 &&
              data.userId == request.auth.uid &&
              data.userName is string && data.userName.size() <= 256 &&
+             (!('customerPhone' in data) || (data.customerPhone is string && data.customerPhone.size() <= 32)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
              data.items is list && data.items.size() >= 1 &&
              data.total is number && data.total >= 0 &&
              data.status in ['pending', 'confirmed', 'ready', 'picked_up', 'cancelled'] &&
