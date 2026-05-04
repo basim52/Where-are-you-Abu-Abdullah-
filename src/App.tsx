@@ -3274,9 +3274,20 @@ export default function App() {
               className="bg-white dark:bg-stone-900 w-full max-w-2xl rounded-[3rem] shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[90vh] border border-stone-100 dark:border-stone-800"
             >
               <div className="p-8 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between">
-                <div className="text-right">
-                  <h2 className="text-2xl font-black text-stone-900 dark:text-white mb-1">{selectedPlace?.name}</h2>
-                  <p className="text-stone-400 text-[10px] font-black uppercase tracking-widest">قائمة الطعام والطلب للاستلام</p>
+                <div className="text-right flex items-center gap-4">
+                  <div className="flex flex-col">
+                    <h2 className="text-2xl font-black text-stone-900 dark:text-white mb-1">{selectedPlace?.name}</h2>
+                    <p className="text-stone-400 text-[10px] font-black uppercase tracking-widest">قائمة الطعام والطلب للاستلام</p>
+                  </div>
+                  {isAdmin && (
+                    <button 
+                      onClick={() => setShowVendorDashboard(true)}
+                      className="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center hover:bg-orange-600 hover:text-white transition-all shadow-sm"
+                      title="إدارة المنيو"
+                    >
+                      <Plus size={20} />
+                    </button>
+                  )}
                 </div>
                 <button onClick={() => setShowMenuModal(false)} className="w-12 h-12 bg-stone-50 dark:bg-stone-800 rounded-2xl flex items-center justify-center text-stone-400 hover:text-rose-500 transition-colors">
                   <X size={24} />
@@ -3321,14 +3332,6 @@ export default function App() {
                       <h3 className="text-lg font-black text-stone-900 dark:text-white mb-1">المنيو قادم قريباً!</h3>
                       <p className="text-stone-400 text-xs">صاحب المطعم ما أضاف قائمة الطعام بعد.</p>
                     </div>
-                    {isAdmin && (
-                      <button 
-                        onClick={() => setShowVendorDashboard(true)}
-                        className="mt-4 px-6 py-3 bg-stone-900 text-white rounded-2xl text-[10px] font-black"
-                      >
-                        أضف أنت كأدمن!
-                      </button>
-                    )}
                   </div>
                 )}
               </div>
