@@ -92,28 +92,29 @@ export async function testFirestoreConnection(silent = false) {
 }
 
 export const signInWithGoogle = async () => {
-  console.log('Starting Google Login with Popup...', { 
-    authDomain: firebaseConfig.authDomain,
-    currentHost: window.location.hostname
-  });
+  const currentHost = window.location.hostname;
+  const authDomain = firebaseConfig.authDomain;
+  
+  console.log('--- Login Debug Info ---');
+  console.log('Current Host:', currentHost);
+  console.log('Firebase Auth Domain:', authDomain);
+  console.log('Identity Platform Settings: Popup redirected to ' + authDomain);
+  
   try {
     const result = await signInWithPopup(auth, googleProvider);
     console.log('Login success:', result.user.email);
     return result.user;
   } catch (error: any) {
-    console.error('Detailed login error:', {
-      code: error.code,
-      message: error.message,
-      stack: error.stack
-    });
+    console.error('--- Login Error ---');
+    console.error('Code:', error.code);
+    console.error('Message:', error.message);
     
-    // Check for common cross-origin / iframe issues
-    if (error.code === 'auth/internal-error' && error.message.includes('popup_closed_by_user')) {
-      console.warn('User closed the popup before finishing login.');
+    if (error.code === 'auth/unauthorized-domain') {
+       console.error(`ERROR: The domain "${currentHost}" is not authorized. Please add it to your Firebase console.`);
     }
     
-    if (error.code === 'auth/network-request-failed') {
-      console.error('Network request failed. This might be due to an ad blocker or cross-site tracking protection.');
+    if (error.code === 'auth/internal-error' && error.message.includes('popup_closed_by_user')) {
+      console.warn('User closed the popup.');
     }
 
     throw error;

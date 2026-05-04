@@ -88,6 +88,7 @@ import {
   addDoc, 
   setDoc,
   deleteDoc,
+  updateDoc,
   doc,
   query, 
   where, 
@@ -474,8 +475,86 @@ export default function App() {
     }
   }, [firestoreEnabled]);
 
+  const handleMenuImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        addNotification('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 5 ميجابايت.', 'warning');
+        return;
+      }
+
+      setIsUploadingMenuImage(true);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const img = new Image();
+        img.src = reader.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          const MAX_SIZE = 600; // Smaller size for menu items to save Firestore space
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const base64 = canvas.toDataURL('image/jpeg', 0.7);
+            setNewMenuItem(prev => ({ ...prev, imageUrl: base64 }));
+          }
+          setIsUploadingMenuImage(false);
+        };
+        img.onerror = () => {
+          setIsUploadingMenuImage(false);
+          addNotification('فشل في تحميل الصورة.', 'error');
+        };
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const deleteMenuItem = async (itemId: string) => {
+    if (!isAdmin) return;
+    if (confirm('هل أنت متأكد من رغبتك في حذف هذا الصنف؟')) {
+      try {
+        await deleteDoc(doc(db, 'menus', itemId));
+        addNotification('تم حذف الصنف بنجاح', 'success');
+        if (selectedPlace?.place_id) {
+          fetchMenu(selectedPlace.place_id);
+        }
+      } catch (error) {
+        addNotification('فشل حذف الصنف', 'error');
+      }
+    }
+  };
+
   const addMenuItem = async () => {
-    if (!selectedPlace?.place_id || !newMenuItem.name || !newMenuItem.price || !isAdmin) return;
+    // Basic validation with notifications
+    if (!selectedPlace?.place_id) {
+      addNotification('لم يتم تحديد المكان بشكل صحيح', 'error');
+      return;
+    }
+    if (!newMenuItem.name || !newMenuItem.price) {
+      addNotification('يرجى إدخال اسم الصنف والسعر', 'warning');
+      return;
+    }
+    if (!isAdmin) {
+      addNotification('ليست لديك صلاحيات المسؤول للإضافة', 'error');
+      return;
+    }
+
     setIsAddingMenuItem(true);
     try {
       await addDoc(collection(db, 'menus'), {
@@ -483,13 +562,15 @@ export default function App() {
         name: newMenuItem.name,
         price: parseFloat(newMenuItem.price),
         imageUrl: newMenuItem.imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400',
-        description: newMenuItem.description,
+        description: newMenuItem.description || '',
         createdAt: serverTimestamp()
       });
+      addNotification('تم إضافة الصنف للمنيو بنجاح!', 'success');
       setNewMenuItem({ name: '', price: '', imageUrl: '', description: '' });
       fetchMenu(selectedPlace.place_id);
     } catch (error) {
       console.error("Error adding menu item:", error);
+      addNotification('فشل في إضافة الصنف. يرجى المحاولة لاحقاً', 'error');
     } finally {
       setIsAddingMenuItem(false);
     }
@@ -500,26 +581,35 @@ export default function App() {
     setIsSubmittingOrder(true);
     try {
       const total = cart.reduce((acc, curr) => acc + (curr.item.price * curr.quantity), 0);
+      const itemsFormatted = cart.map(c => ({
+        menuItemId: c.item.id!,
+        name: c.item.name,
+        price: c.item.price,
+        quantity: c.quantity
+      }));
+
       const orderData: Omit<Order, 'id'> = {
         placeId: selectedPlace.place_id,
         userId: user.uid,
         userName: user.displayName || 'أبو عبدالله',
-        items: cart.map(c => ({
-          menuItemId: c.item.id!,
-          name: c.item.name,
-          price: c.item.price,
-          quantity: c.quantity
-        })),
+        items: itemsFormatted,
         total,
         status: 'pending',
         createdAt: serverTimestamp() as any
       };
+
+      // 1. Save to Firestore
       await addDoc(collection(db, 'orders'), orderData);
+      
+      // 2. Open WhatsApp link
+      sendWhatsAppOrder(itemsFormatted, total, selectedPlace.name);
+
       setOrderSuccess(true);
       setCart([]);
       setTimeout(() => setOrderSuccess(false), 3000);
     } catch (error) {
       console.error("Error submitting order:", error);
+      addNotification('حدث خطأ أثناء إرسال الطلب', 'error');
     } finally {
       setIsSubmittingOrder(false);
     }
@@ -583,12 +673,85 @@ export default function App() {
   const [cart, setCart] = useState<{ item: MenuItem; quantity: number }[]>([]);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
+
+  // Audio Alert for New Orders
+  const playOrderAlert = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.1);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.5);
+    } catch (e) {
+      console.warn("Audio alert failed:", e);
+    }
+  };
+
+  // WhatsApp Message Formatter
+  const sendWhatsAppOrder = (items: any[], total: number, restName: string) => {
+    const defaultNumber = '966500000000'; // Default restaurant number
+    let message = `*طلب جديد للاستلام من: ${restName}*\n\n`;
+    items.forEach((item, index) => {
+      message += `${index + 1}. ${item.name} (${item.quantity}x) - ${item.price * item.quantity} ريال\n`;
+    });
+    message += `\n*الإجمالي: ${total} ريال*\n`;
+    message += `\nالاسم: ${user?.displayName || 'عميل أبو عبدالله'}`;
+    const encodedMessage = encodeURIComponent(message);
+    window.open(`https://wa.me/${defaultNumber}?text=${encodedMessage}`, '_blank');
+  };
   
   // Vendor Dashboard States
   const [showVendorDashboard, setShowVendorDashboard] = useState(false);
   const [newMenuItem, setNewMenuItem] = useState({ name: '', price: '', imageUrl: '', description: '' });
   const [isAddingMenuItem, setIsAddingMenuItem] = useState(false);
+  const [isUploadingMenuImage, setIsUploadingMenuImage] = useState(false);
   const [vendorOrders, setVendorOrders] = useState<Order[]>([]);
+
+  // Real-time Orders Listener for Vendor
+  useEffect(() => {
+    if (!firestoreEnabled || !showVendorDashboard || !selectedPlace?.place_id) return;
+
+    const q = query(
+      collection(db, 'orders'),
+      where('placeId', '==', selectedPlace.place_id),
+      orderBy('createdAt', 'desc'),
+      limit(20)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Order[];
+      
+      // Trigger audio alert if a new order is added (not a modification)
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added" && !snapshot.metadata.hasPendingWrites) {
+          playOrderAlert();
+          addNotification('وصل طلب جديد للمطعم!', 'info');
+        }
+      });
+
+      setVendorOrders(orders);
+    }, (error) => {
+      console.warn("Orders listener failed:", error.message);
+    });
+
+    return () => unsubscribe();
+  }, [showVendorDashboard, selectedPlace?.place_id, firestoreEnabled]);
+
+  const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
+      addNotification('تم تحديث حالة الطلب بنجاح', 'success');
+    } catch (error) {
+      addNotification('فشل تحديث الحالة', 'error');
+    }
+  };
 
   // Mood Selection States
   const [showMoodSection, setShowMoodSection] = useState(false);
@@ -1005,11 +1168,16 @@ export default function App() {
       const currentHost = window.location.hostname;
       
       if (err.code === 'auth/unauthorized-domain') {
-        addNotification(`يجب إضافة النطاق (${currentHost}) إلى Authorized Domains في Firebase.`, 'error');
+        const msg = `النطاق (${currentHost}) غير مصرح له بالدخول. يرجى إضافته في إعدادات Firebase (Authorized Domains).`;
+        addNotification(msg, 'error');
+        // Explicit alert for high visibility
+        window.alert(`⚠️ تنبيه فني: \nيجب إضافة هذا النطاق بدقة في لوحة Firebase:\n\n${currentHost}\n\nبدون ذلك لن يعمل تسجيل الدخول.`);
       } else if (err.code === 'auth/popup-blocked') {
         addNotification('تم حظر النافذة المنبثقة. يرجى السماح بها من المتصفح.', 'error');
       } else if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user' || (err.code === 'auth/internal-error' && err.message?.includes('popup_closed_by_user'))) {
-        // User closed it, no notification needed
+        // User closed it
+      } else if (err.code === 'auth/network-request-failed') {
+        addNotification('خطأ في الشبكة. يرجى التأكد من عدم وجود مانع إعلانات (AdBlocker) قد يحظر تسجيل الدخول.', 'error');
       } else {
         addNotification(`فشل تسجيل الدخول: ${err.message || 'خطأ غير معروف'}`, 'error');
       }
@@ -1710,18 +1878,33 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div className="relative group/login">
-                  <button 
-                    onClick={handleLogin} 
-                    className="w-11 h-11 flex items-center justify-center bg-stone-900 text-white rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
-                  >
-                    <UserIcon size={20} />
-                  </button>
-                  <div className="absolute top-full left-0 mt-3 p-3 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl opacity-0 group-hover/login:opacity-100 transition-opacity pointer-events-none w-64 z-50 text-right">
-                    <p className="text-[10px] text-stone-600 dark:text-stone-400 font-bold leading-relaxed">
-                      إذا واجهت مشكلة في الدخول على Vercel، تأكد من إضافة النطاق إلى القائمة المسموحة (Authorized Domains) في إعدادات Firebase Authentication.
-                    </p>
+                <div className="flex items-center gap-2">
+                  <div className="relative group/login">
+                    <button 
+                      onClick={handleLogin} 
+                      className="w-11 h-11 flex items-center justify-center bg-stone-900 text-white rounded-xl hover:bg-black transition-all shadow-lg active:scale-95"
+                    >
+                      <UserIcon size={20} />
+                    </button>
+                    <div className="absolute top-full left-0 mt-3 p-4 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-2xl shadow-2xl opacity-0 group-hover/login:opacity-100 transition-opacity pointer-events-none w-72 z-50 text-right">
+                      <h4 className="text-[11px] font-black text-stone-900 dark:text-white mb-2">مشكلة في الدخول؟</h4>
+                      <p className="text-[10px] text-stone-500 dark:text-stone-400 font-bold leading-relaxed mb-3">
+                        يجب إضافة النطاق الحالي لمشروعك في إعدادات Firebase Authentication ليتمكن الجميع من الدخول.
+                      </p>
+                      <div className="bg-stone-50 dark:bg-stone-900 p-2 rounded-lg break-all font-mono text-[9px] text-orange-600 dark:text-orange-400 select-all pointer-events-auto">
+                        {window.location.hostname}
+                      </div>
+                    </div>
                   </div>
+                  <button 
+                    onClick={() => {
+                        window.alert(`خطوات حل مشكلة الدخول:\n\n1. انسخ هذا النطاق: ${window.location.hostname}\n2. اذهب إلى Firebase Console\n3. Authentication -> Settings -> Authorized Domains\n4. أضف النطاق هناك.\n\nأيضاً: تأكد من تعطيل مانع الإعلانات (AdBlocker).`);
+                    }}
+                    className="w-8 h-8 flex items-center justify-center bg-stone-100 dark:bg-stone-800 text-stone-400 rounded-lg hover:text-orange-500 transition-all"
+                    title="مساعدة تسجيل الدخول"
+                  >
+                    <Info size={14} />
+                  </button>
                 </div>
               )}
               <button 
@@ -3207,54 +3390,174 @@ export default function App() {
                 <button onClick={() => setShowVendorDashboard(false)} className="w-10 h-10 bg-stone-50 dark:bg-stone-800 rounded-xl flex items-center justify-center text-stone-400"><X size={20} /></button>
               </div>
 
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">اسم الطبق</label>
-                  <input 
-                    type="text" 
-                    value={newMenuItem.name}
-                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, name: e.target.value }))}
-                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
-                    placeholder="مثال: برجر دجاج كرسبي"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">السعر (ريال)</label>
-                  <input 
-                    type="number" 
-                    value={newMenuItem.price}
-                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, price: e.target.value }))}
-                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
-                    placeholder="25.00"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">رابط صورة الطبق</label>
-                  <input 
-                    type="text" 
-                    value={newMenuItem.imageUrl}
-                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, imageUrl: e.target.value }))}
-                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
-                    placeholder="رابط مباشر للصورة"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">الوصف</label>
-                  <textarea 
-                    value={newMenuItem.description}
-                    onChange={(e) => setNewMenuItem(prev => ({ ...prev, description: e.target.value }))}
-                    className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner h-24 resize-none" 
-                    placeholder="وصف مكونات الطبق..."
-                  />
+              <div className="space-y-6 overflow-y-auto max-h-[60vh] no-scrollbar">
+                {/* Orders Section */}
+                <div className="space-y-4">
+                  <h4 className="text-sm font-black text-stone-900 dark:text-white flex items-center gap-2">
+                    <ShoppingBag size={18} className="text-orange-500" />
+                    طلبات الاستلام الجارية ({vendorOrders.length})
+                  </h4>
+                  {vendorOrders.length > 0 ? (
+                    <div className="space-y-3">
+                      {vendorOrders.map(order => (
+                        <div key={order.id} className="bg-stone-50 dark:bg-stone-800/50 rounded-2xl p-4 border border-stone-100 dark:border-stone-700">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] font-black text-blue-500 bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded-lg">#{order.id?.slice(-4)}</span>
+                            <span className={`text-[10px] font-black px-2 py-1 rounded-lg ${
+                              order.status === 'pending' ? 'bg-orange-100 text-orange-600' : 
+                              order.status === 'ready' ? 'bg-emerald-100 text-emerald-600' : 'bg-stone-100 text-stone-500'
+                            }`}>
+                              {order.status === 'pending' ? 'قيد الانتظار' : order.status === 'confirmed' ? 'تم التأكيد' : order.status === 'ready' ? 'جاهز للاستلام' : order.status}
+                            </span>
+                          </div>
+                          <p className="text-xs font-black text-stone-900 dark:text-white mb-2">{order.userName}</p>
+                          <div className="text-[10px] text-stone-500 space-y-1 mb-3">
+                            {order.items.map((item, i) => (
+                              <div key={i} className="flex justify-between items-center">
+                                <span>{item.name} x {item.quantity}</span>
+                                <span className="font-bold">{item.price * item.quantity} ريال</span>
+                              </div>
+                            ))}
+                            <div className="pt-2 border-t border-stone-200 dark:border-stone-700 flex justify-between items-center text-stone-900 dark:text-white font-black">
+                              <span>المجموع</span>
+                              <span>{order.total} ريال</span>
+                            </div>
+                          </div>
+                          {order.status === 'pending' && (
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => updateOrderStatus(order.id!, 'ready')}
+                                className="flex-1 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-black"
+                              >
+                                تم التحضير / جاهز
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-center py-4 text-xs text-stone-400 font-bold">لا يوجد طلبات حالياً</p>
+                  )}
                 </div>
 
-                <button 
-                  onClick={addMenuItem}
-                  disabled={isAddingMenuItem}
-                  className="w-full py-5 bg-stone-900 text-white rounded-2xl font-black text-sm mt-4 shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3"
-                >
-                  {isAddingMenuItem ? <RotateCw className="animate-spin" size={18} /> : <><Plus size={18} /> إضافة للمنيو</>}
-                </button>
+                {/* Manage Menu Section */}
+                <div className="pt-6 border-t border-stone-100 dark:border-stone-800 space-y-4">
+                  <h4 className="text-sm font-black text-stone-900 dark:text-white flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <UtensilsCrossed size={18} className="text-rose-500" />
+                      إدارة المنيو ({menuItems.length})
+                    </span>
+                    <span className="text-[10px] text-stone-400">يمكنك إضافة حتى 50 صنفاً</span>
+                  </h4>
+                  
+                  {menuItems.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto no-scrollbar pr-1">
+                      {menuItems.map((item) => (
+                        <div key={item.id} className="bg-stone-50 dark:bg-stone-800/30 rounded-xl p-3 flex items-center justify-between group">
+                          <div className="flex items-center gap-3">
+                            <img src={item.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
+                            <div className="text-right">
+                              <p className="text-[11px] font-black text-stone-900 dark:text-white leading-none mb-1">{item.name}</p>
+                              <p className="text-[10px] text-stone-400 font-bold">{item.price} ريال</p>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => deleteMenuItem(item.id!)}
+                            className="w-8 h-8 rounded-lg bg-white dark:bg-stone-700 text-stone-300 hover:text-rose-500 hover:bg-rose-50 transition-all flex items-center justify-center"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-blue-50 dark:bg-blue-900/10 rounded-2xl p-4 text-center">
+                      <p className="text-[10px] text-blue-600 dark:text-blue-400 font-black">ابدأ بإضافة أصناف لمنيو مطعمك في الأسفل!</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Add Menu Item Section */}
+                <div className="pt-6 border-t border-stone-100 dark:border-stone-800 space-y-4">
+                  <h4 className="text-sm font-black text-stone-900 dark:text-white flex items-center gap-2">
+                    <Plus size={18} className="text-blue-500" />
+                    إضافة صنف جديد للمنيو
+                  </h4>
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">اسم الطبق</label>
+                      <input 
+                        type="text" 
+                        value={newMenuItem.name}
+                        onChange={(e) => setNewMenuItem(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
+                        placeholder="مثال: برجر دجاج كرسبي"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">السعر (ريال)</label>
+                      <input 
+                        type="number" 
+                        value={newMenuItem.price}
+                        onChange={(e) => setNewMenuItem(prev => ({ ...prev, price: e.target.value }))}
+                        className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner" 
+                        placeholder="25.00"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">صورة الطبق</label>
+                      <div className="relative group">
+                        <input 
+                          type="file" 
+                          accept="image/*"
+                          onChange={handleMenuImageUpload}
+                          className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                          disabled={isUploadingMenuImage}
+                        />
+                        <div className={`w-full ${newMenuItem.imageUrl ? 'h-40' : 'h-32'} border-2 border-dashed border-stone-200 dark:border-stone-700 rounded-3xl flex flex-col items-center justify-center gap-2 bg-stone-50 dark:bg-stone-800/50 group-hover:bg-white dark:group-hover:bg-stone-800 transition-all overflow-hidden`}>
+                          {newMenuItem.imageUrl ? (
+                            <div className="relative w-full h-full">
+                              <img src={newMenuItem.imageUrl} alt="Preview" className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-black">تغيير الصورة</div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="w-10 h-10 bg-white dark:bg-stone-700 rounded-xl flex items-center justify-center text-stone-300 shadow-sm">
+                                {isUploadingMenuImage ? (
+                                  <RotateCw className="animate-spin text-orange-500" size={20} />
+                                ) : (
+                                  <Upload size={20} />
+                                )}
+                              </div>
+                              <div className="text-center">
+                                <p className="text-[10px] font-black text-stone-800 dark:text-stone-200">{isUploadingMenuImage ? 'جاري التحميل...' : 'اضغط لرفع صورة الطبق'}</p>
+                                <p className="text-[8px] text-stone-400 font-bold mt-0.5">PNG, JPG حتى 5MB</p>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-stone-400 uppercase tracking-widest mr-2">الوصف</label>
+                      <textarea 
+                        value={newMenuItem.description}
+                        onChange={(e) => setNewMenuItem(prev => ({ ...prev, description: e.target.value }))}
+                        className="w-full bg-stone-50 dark:bg-stone-800 border-none rounded-2xl p-4 text-sm font-bold shadow-inner h-24 resize-none" 
+                        placeholder="وصف مكونات الطبق..."
+                      />
+                    </div>
+
+                    <button 
+                      onClick={addMenuItem}
+                      disabled={isAddingMenuItem}
+                      className="w-full py-5 bg-stone-900 text-white rounded-2xl font-black text-sm mt-4 shadow-xl active:scale-95 transition-all flex items-center justify-center gap-3"
+                    >
+                      {isAddingMenuItem ? <RotateCw className="animate-spin" size={18} /> : <><Plus size={18} /> إضافة للمنيو</>}
+                    </button>
+                  </div>
+                </div>
               </div>
             </motion.div>
           </div>

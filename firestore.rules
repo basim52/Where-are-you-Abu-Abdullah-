@@ -144,7 +144,7 @@ service cloud.firestore {
              data.placeId is string && data.placeId.size() <= 128 &&
              data.name is string && data.name.size() <= 256 &&
              data.price is number && data.price >= 0 &&
-             data.imageUrl is string && data.imageUrl.size() <= 2048 &&
+             data.imageUrl is string && data.imageUrl.size() <= 2097152 &&
              (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
              (!('createdAt' in data) || (data.createdAt == request.time));
     }
@@ -164,6 +164,7 @@ service cloud.firestore {
     match /menus/{menuId} {
       allow read: if true;
       allow write: if isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /orders/{orderId} {
