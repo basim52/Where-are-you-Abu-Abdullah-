@@ -1790,12 +1790,23 @@ export default function App() {
 
   const handlePlaceSelect = (placeId: string) => getPlaceDetails(placeId);
 
-  const navigateToPlace = (placeId: string, name?: string) => {
-    if (!placeId) return;
+  const getLat = (loc: any) => typeof loc?.lat === 'function' ? loc.lat() : loc?.lat;
+  const getLng = (loc: any) => typeof loc?.lng === 'function' ? loc.lng() : loc?.lng;
+
+  const navigateToPlace = (placeId: string, name?: string, lat?: number, lng?: number) => {
+    if (!placeId && !lat) return;
     
-    const destination = name ? encodeURIComponent(name) : '';
-    // Universal Link format - using "maps.google.com" often works better for triggering native apps
-    const url = `https://www.google.com/maps/dir/?api=1&destination_place_id=${placeId}${destination ? `&destination=${destination}` : ''}&travelmode=driving&dir_action=navigate`;
+    const destinationName = name ? encodeURIComponent(name) : '';
+    let url = "";
+    
+    // If it's a dummy ID (exclusive), we MUST use coordinates as the primary destination
+    const isDummyId = placeId?.startsWith('abu_abdullah_exclusive');
+    
+    if (lat && lng) {
+      url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${!isDummyId ? `&destination_place_id=${placeId}` : ''}&travelmode=driving&dir_action=navigate`;
+    } else {
+      url = `https://www.google.com/maps/dir/?api=1&destination=${destinationName}&destination_place_id=${placeId}&travelmode=driving&dir_action=navigate`;
+    }
     
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     
@@ -3014,7 +3025,12 @@ export default function App() {
                                    تصفح المنيو
                                 </button>
                                 <button 
-                                  onClick={() => navigateToPlace(place.place_id!, place.name)}
+                                  onClick={() => navigateToPlace(
+                                    place.place_id!, 
+                                    place.name,
+                                    getLat(place.geometry?.location),
+                                    getLng(place.geometry?.location)
+                                  )}
                                   className="w-full py-4 bg-white/20 backdrop-blur-md text-white border border-white/30 rounded-2xl font-black text-xs active:scale-95 transition-all flex items-center justify-center gap-2"
                                 >
                                    <Navigation size={14} />
@@ -3144,10 +3160,17 @@ export default function App() {
                           <h3 className="text-xl font-black text-stone-900 dark:text-white group-hover:text-orange-500 transition-colors mb-1 truncate">{place.name}</h3>
                           <p className="text-[11px] text-stone-400 dark:text-stone-500 font-bold truncate mb-4">{place.vicinity}</p>
                           <div className="mt-auto pt-4 border-t border-stone-50 dark:border-stone-800 flex items-center justify-between text-[11px] font-black">
-                              <span className={isPlaceOpen(place) === true ? 'text-emerald-500 flex items-center gap-1' : isPlaceOpen(place) === false ? 'text-rose-400 flex items-center gap-1' : 'text-stone-400 flex items-center gap-1'}>
-                                <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : isPlaceOpen(place) === false ? 'bg-rose-400' : 'bg-stone-300'}`} />
-                                {isPlaceOpen(place) === true ? 'مفتوح الحين' : isPlaceOpen(place) === false ? 'مغلق حالياً' : 'غير متوفر'}
-                              </span>
+                              {isPlaceOpen(place) === true || isPlaceOpen(place) === false ? (
+                                <span className={isPlaceOpen(place) === true ? 'text-emerald-500 flex items-center gap-1' : 'text-rose-400 flex items-center gap-1'}>
+                                  <div className={`w-2 h-2 rounded-full ${isPlaceOpen(place) === true ? 'bg-emerald-500 animate-pulse' : 'bg-rose-400'}`} />
+                                  {isPlaceOpen(place) === true ? 'مفتوح الحين' : 'مغلق حالياً'}
+                                </span>
+                              ) : (
+                                <span className="text-orange-600 dark:text-orange-400 flex items-center gap-1.5 animate-pulse font-black max-w-[130px] sm:max-w-none">
+                                  <ArrowLeft size={12} className="flex-shrink-0" />
+                                  <span className="truncate">اطلب واستلم من {place.name}</span>
+                                </span>
+                              )}
                               <div className="flex items-center gap-2">
                                 <button 
                                   onClick={(e) => { 
@@ -3162,7 +3185,15 @@ export default function App() {
                                   قائمة الطعام
                                 </button>
                                 <button 
-                                  onClick={(e) => { e.stopPropagation(); navigateToPlace(place.place_id!, place.name); }}
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    navigateToPlace(
+                                      place.place_id!, 
+                                      place.name,
+                                      getLat(place.geometry?.location),
+                                      getLng(place.geometry?.location)
+                                    ); 
+                                  }}
                                   className="w-8 h-8 flex items-center justify-center bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-500 hover:text-white transition-all ring-4 ring-transparent hover:ring-blue-500/10"
                                 >
                                   <Navigation size={14} />
@@ -3293,7 +3324,12 @@ export default function App() {
                     <div className="mb-6">
                       <h2 className="text-3xl font-black text-stone-900 dark:text-white mb-2">{selectedPlace.name}</h2>
                       <button 
-                        onClick={() => navigateToPlace(selectedPlace.place_id!, selectedPlace.name)}
+                        onClick={() => navigateToPlace(
+                          selectedPlace.place_id!, 
+                          selectedPlace.name,
+                          getLat(selectedPlace.geometry?.location),
+                          getLng(selectedPlace.geometry?.location)
+                        )}
                         className="flex items-center justify-end gap-2 text-stone-500 dark:text-stone-400 hover:text-orange-500 transition-colors group/addr w-full text-right"
                       >
                         <p className="text-sm font-medium group-hover/addr:underline decoration-2 underline-offset-4">{selectedPlace.formatted_address}</p>
@@ -3317,7 +3353,12 @@ export default function App() {
 
                     <div className="flex flex-col gap-3 mb-10">
                       <button 
-                        onClick={() => navigateToPlace(selectedPlace.place_id!, selectedPlace.name)}
+                        onClick={() => navigateToPlace(
+                          selectedPlace.place_id!, 
+                          selectedPlace.name,
+                          getLat(selectedPlace.geometry?.location),
+                          getLng(selectedPlace.geometry?.location)
+                        )}
                         className="w-full py-5 bg-orange-500 text-white rounded-[1.5rem] font-black flex items-center justify-center gap-3 active:scale-95 transition-all text-sm shadow-lg shadow-orange-500/20"
                       >
                         <Navigation size={20} />
