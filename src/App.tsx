@@ -415,8 +415,7 @@ export default function App() {
 وش قلت؟ نعتمد؟
 رابط المكان: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || '')}&query_place_id=${place.place_id} `;
     
-    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
-    window.open(whatsappUrl, '_blank');
+    openExternalWhatsApp('', message);
   };
 
   const addNotification = (message: string, type: AppNotification['type'] = 'info') => {
@@ -763,8 +762,7 @@ export default function App() {
 
     message += `\n*الإجمالي: ${total} ريال*\n`;
     message += `\nالاسم: ${user?.displayName || 'عميل أبو عبدالله'}`;
-    const encodedMessage = encodeURIComponent(message);
-    window.open(`https://wa.me/${targetNumber}?text=${encodedMessage}`, '_blank');
+    openExternalWhatsApp(targetNumber, message);
   };
   
   // Vendor Dashboard States
@@ -932,8 +930,7 @@ export default function App() {
       // Send Ready WhatsApp Notification to Customer
       if (newStatus === 'ready' && order?.customerPhone) {
         const message = `مرحباً ${order.userName}! 🌟\nيسعدنا إبلاغك بأن طلبك الشهي من *${selectedPlace?.name || 'مطعمنا'}* أصبح جاهزاً للاستلام الآن.\n\nننتظر زيارتك! ✨`;
-        const encoded = encodeURIComponent(message);
-        window.open(`https://wa.me/${order.customerPhone.replace(/\D/g, '')}?text=${encoded}`, '_blank');
+        openExternalWhatsApp(order.customerPhone, message);
       }
     } catch (error) {
       addNotification('فشل تحديث الحالة', 'error');
@@ -1793,25 +1790,63 @@ export default function App() {
   const getLat = (loc: any) => typeof loc?.lat === 'function' ? loc.lat() : loc?.lat;
   const getLng = (loc: any) => typeof loc?.lng === 'function' ? loc.lng() : loc?.lng;
 
+  const openExternalWhatsApp = (phone: string, text: string) => {
+    const cleanPhone = phone.replace(/\D/g, '');
+    const encodedText = encodeURIComponent(text);
+    
+    const isCapacitor = !!(window as any).Capacitor;
+    const isMobile = isCapacitor || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    
+    if (isMobile) {
+      const appUrl = cleanPhone 
+        ? `whatsapp://send?phone=${cleanPhone}&text=${encodedText}`
+        : `whatsapp://send?text=${encodedText}`;
+      
+      window.location.href = appUrl;
+      
+      // Fallback in case WhatsApp is not installed
+      setTimeout(() => {
+        const webUrl = cleanPhone
+          ? `https://wa.me/${cleanPhone}?text=${encodedText}`
+          : `https://wa.me/?text=${encodedText}`;
+        window.location.href = webUrl;
+      }, 1000);
+    } else {
+      const webUrl = cleanPhone
+        ? `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`
+        : `https://wa.me/?text=${encodedText}`;
+      window.open(webUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   const navigateToPlace = (placeId: string, name?: string, lat?: number, lng?: number) => {
     if (!placeId && !lat) return;
     
     const destinationName = name ? encodeURIComponent(name) : '';
     let url = "";
     
-    // If it's a dummy ID (exclusive), we MUST use coordinates as the primary destination
-    const isDummyId = placeId?.startsWith('abu_abdullah_exclusive');
+    const isCapacitor = !!(window as any).Capacitor;
+    const isMobile = isCapacitor || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const isAndroid = isCapacitor || /Android/i.test(navigator.userAgent);
     
-    if (lat && lng) {
-      url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${!isDummyId ? `&destination_place_id=${placeId}` : ''}&travelmode=driving&dir_action=navigate`;
+    if (isAndroid && lat && lng) {
+      // Use geo scheme on Android to force Google Maps native app launch
+      // "geo:lat,lng?q=lat,lng(Label)" is the most robust way to trigger maps app selection/launch
+      url = `geo:${lat},${lng}?q=${lat},${lng}(${name ? name : 'المطعم'})`;
+    } else if (isMobile && lat && lng) {
+      // Use Apple Maps scheme on iOS
+      url = `maps://maps.apple.com/?q=${destinationName}&ll=${lat},${lng}`;
     } else {
-      url = `https://www.google.com/maps/dir/?api=1&destination=${destinationName}&destination_place_id=${placeId}&travelmode=driving&dir_action=navigate`;
+      // Standard Google Maps directions URL for Web
+      const isDummyId = placeId?.startsWith('abu_abdullah_exclusive');
+      if (lat && lng) {
+        url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${!isDummyId ? `&destination_place_id=${placeId}` : ''}&travelmode=driving&dir_action=navigate`;
+      } else {
+        url = `https://www.google.com/maps/dir/?api=1&destination=${destinationName}&destination_place_id=${placeId}&travelmode=driving&dir_action=navigate`;
+      }
     }
     
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    
     if (isMobile) {
-      // Use location.href on mobile to allow the OS to intercept the URL and open the native app
       window.location.href = url;
     } else {
       window.open(url, '_blank', 'noopener,noreferrer');
